@@ -203,4 +203,17 @@ mod tests {
         let (opener, _) = draw(&not_a_zip(&home), Some(&home));
         assert_eq!(opener.as_deref(), Some("/Apps/snapmaker-orca.app"));
     }
+
+    #[test]
+    fn the_extension_is_entitled_to_read_the_snapshot_folder() {
+        let entitlements = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../app/macos/ThumbnailExtension/SlicerRouterThumbnail.entitlements");
+        let text = std::fs::read_to_string(entitlements).unwrap();
+        let folder = Snapshot::dir_for_home(Path::new("/"));
+        let folder = format!("<string>{}/</string>", folder.display());
+        assert!(
+            text.contains("home-relative-path.read-only") && text.contains(&folder),
+            "the extension's entitlements must grant read access to {folder}"
+        );
+    }
 }
