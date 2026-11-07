@@ -189,6 +189,8 @@ fn run_app(failures: Option<Vec<Failure>>) {
         .invoke_handler(tauri::generate_handler![
             get_state,
             choose,
+            retry_failures,
+            open_failures_in,
             dismiss_failures
         ])
         .build(tauri::generate_context!())
@@ -362,6 +364,48 @@ fn dismiss_failures(shared: State<'_, Shared>) {
     shared.failures.lock().unwrap().clear();
 }
 
+/// Launch the failures that can work again in the slicer that failed them. What
+/// still fails comes back as failures.
+#[tauri::command]
+fn retry_failures(app: AppHandle, shared: State<'_, Shared>) {
+    let failures = std::mem::take(&mut *shared.failures.lock().unwrap());
+    let remaining = failure::retry(failures, &discover_installed(), launch_file);
+    finish_recovery(&app, &shared, remaining);
+}
+
+/// Open every failed file in `slicer`, this once. The config is not changed.
+#[tauri::command]
+fn open_failures_in(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    slicer: Slicer,
+) -> Result<(), String> {
+    let target = discover_installed()
+        .into_iter()
+        .find(|i| i.slicer == slicer)
+        .ok_or_else(|| format!("{slicer} is not installed"))?;
+    let failures = std::mem::take(&mut *shared.failures.lock().unwrap());
+    let remaining = failure::open_in(failures, &target, launch_file);
+    finish_recovery(&app, &shared, remaining);
+    Ok(())
+}
+
+fn finish_recovery(app: &AppHandle, shared: &Shared, remaining: Vec<Failure>) {
+    shared.record(Vec::new(), remaining);
+    let _ = app.emit(STATE_CHANGED_EVENT, ());
+    exit_if_idle(app, shared);
+}
+
+/// Exit once nothing is waiting or failing, unless the person asked for the window.
+fn exit_if_idle(app: &AppHandle, shared: &Shared) {
+    if shared.pending.lock().unwrap().is_empty()
+        && shared.failures.lock().unwrap().is_empty()
+        && !shared.window_requested.load(Ordering::SeqCst)
+    {
+        app.exit(0);
+    }
+}
+
 /// Answer a question and open the files that were waiting on it.
 ///
 /// `detected` is the group's slicer from [`PendingGroupView`], or `None` for
@@ -383,26 +427,17 @@ fn choose(
         .ok_or_else(|| format!("{slicer} is not installed"))?;
     let path = Config::default_path().ok_or("cannot determine the config folder")?;
 
-    let (released, nothing_left) = {
-        let mut pending = shared.pending.lock().unwrap();
-        let released = pending::resolve(&path, &mut pending, detected, slicer)?;
-        (released, pending.is_empty())
-    };
+    let released = pending::resolve(&path, &mut shared.pending.lock().unwrap(), detected, slicer)?;
     let launches: Vec<_> = released
         .iter()
         .map(|file| (file.clone(), target.clone()))
         .collect();
     let failures = launch_all(&launches, launch_file);
     refresh_thumbnails(installed.clone(), &load_config_or_default());
-    let all_opened = failures.is_empty();
     shared.record(Vec::new(), failures);
     let _ = app.emit(STATE_CHANGED_EVENT, ());
-    if all_opened
-        && !released.is_empty()
-        && nothing_left
-        && !shared.window_requested.load(Ordering::SeqCst)
-    {
-        app.exit(0);
+    if !released.is_empty() {
+        exit_if_idle(&app, &shared);
     }
     Ok(())
 }
