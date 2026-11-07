@@ -470,7 +470,7 @@ function fillSheet(sheet, want) {
     want.kind === "question"
       ? questionSheet(ui.data.pending.find((group) => questionKey(group) === want.key))
       : failureSheet(ui.data);
-  sheet.replaceChildren(
+  sheet.replaceChildren(...compact([
     h(
       "div",
       { class: "shead" },
@@ -488,9 +488,9 @@ function fillSheet(sheet, want) {
         h("span", { class: "kbd", "aria-hidden": "true" }, "esc"),
       ),
     ),
-    ...compact(body),
+    body,
     ui.problem && h("p", { class: "sheet-problem", role: "alert" }, ui.problem),
-  );
+  ]));
   if (key) sheet.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
 }
 
