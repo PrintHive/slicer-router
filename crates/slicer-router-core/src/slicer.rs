@@ -42,7 +42,7 @@ pub struct SlicerSpec {
 pub struct WindowsHints {
     /// Executable file names, in preference order.
     pub exe_names: &'static [&'static str],
-    /// Install folders relative to `Program Files`, `Program Files (x86)` and
+    /// Install folders, written with `/` separators, relative to `Program Files`, `Program Files (x86)` and
     /// `%LOCALAPPDATA%\Programs`.
     pub install_dirs: &'static [&'static str],
     /// Prefixes of the `DisplayName` value under the registry `Uninstall` keys.
@@ -111,7 +111,7 @@ static PRUSA_SLICER_SPEC: SlicerSpec = SlicerSpec {
     mac_bundle_ids: &["com.prusa3d.slic3r"],
     windows: WindowsHints {
         exe_names: &["prusa-slicer.exe"],
-        install_dirs: &["Prusa3D\\PrusaSlicer", "PrusaSlicer"],
+        install_dirs: &["Prusa3D/PrusaSlicer", "PrusaSlicer"],
         uninstall_display_names: &["PrusaSlicer"],
     },
     printers: PrinterPatterns {
