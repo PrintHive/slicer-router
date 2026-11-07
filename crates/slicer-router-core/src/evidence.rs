@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
@@ -145,29 +146,51 @@ fn find_entry<R: Read + io::Seek>(archive: &ZipArchive<R>, wanted: &str) -> Opti
 }
 
 /// The `Application` metadata value, scanning only until the geometry starts.
+///
+/// The value arrives as several events when it holds an entity (`PrusaSlicer&#45;2.9.0`
+/// is text, a reference, then more text), so pieces are joined until the end tag.
 fn read_application(reader: impl BufRead) -> Result<Option<String>, quick_xml::Error> {
     let mut xml = Reader::from_reader(reader);
     let mut buf = Vec::new();
-    let mut in_application = false;
+    let mut value: Option<String> = None;
     loop {
         match xml.read_event_into(&mut buf)? {
             Event::Start(start) if start.local_name().as_ref() == "metadata" => {
-                in_application = start
+                let is_application = start
                     .attributes()
                     .flatten()
                     .any(|a| a.key.as_ref() == "name" && a.value == "Application");
+                value = is_application.then(String::new);
             }
             Event::Start(start) | Event::Empty(start)
                 if matches!(start.local_name().as_ref(), "resources" | "build") =>
             {
                 return Ok(None);
             }
-            Event::Text(text) if in_application => {
-                let text = text.xml10_content();
-                let text = text.trim();
-                return Ok((!text.is_empty()).then(|| text.to_owned()));
+            Event::Text(text) => {
+                if let Some(value) = &mut value {
+                    value.push_str(&text.xml10_content());
+                }
             }
-            Event::End(_) => in_application = false,
+            Event::CData(data) => {
+                if let Some(value) = &mut value {
+                    value.push_str(&data.xml10_content());
+                }
+            }
+            Event::GeneralRef(reference) => {
+                if let Some(value) = &mut value {
+                    if let Ok(Some(c)) = reference.resolve_char_ref() {
+                        value.push(c);
+                    } else if let Some(text) = resolve_predefined_entity(&reference) {
+                        value.push_str(text);
+                    }
+                }
+            }
+            Event::End(_) => {
+                if let Some(value) = value.take() {
+                    return Ok(non_empty(&value));
+                }
+            }
             Event::Eof => return Ok(None),
             _ => {}
         }
@@ -262,6 +285,26 @@ mod tests {
             read_application(Cursor::new(xml)).unwrap().as_deref(),
             Some("BambuStudio-02.08.02.61")
         );
+    }
+
+    #[test]
+    fn application_split_by_entities_is_joined() {
+        let xml = r#"<model><metadata name="Application">PrusaSlicer&#45;2.9.0</metadata><resources/></model>"#;
+        assert_eq!(
+            read_application(Cursor::new(xml)).unwrap().as_deref(),
+            Some("PrusaSlicer-2.9.0")
+        );
+        let xml = r#"<model><metadata name="Application">A&amp;B &#x2D; <![CDATA[C]]></metadata><resources/></model>"#;
+        assert_eq!(
+            read_application(Cursor::new(xml)).unwrap().as_deref(),
+            Some("A&B - C")
+        );
+    }
+
+    #[test]
+    fn empty_application_tag_has_no_value() {
+        let xml = r#"<model><metadata name="Application"></metadata><resources/></model>"#;
+        assert_eq!(read_application(Cursor::new(xml)).unwrap(), None);
     }
 
     #[test]

@@ -101,6 +101,16 @@ fn prusaslicer_project_with_a_prusa_printer() {
 }
 
 #[test]
+fn application_tag_written_with_a_character_reference_is_read_whole() {
+    let verdict = detect_fixture(ThreeMf::new().model(Some("PrusaSlicer&#45;2.9.0")));
+    assert_verdict(&verdict, Some(Slicer::PrusaSlicer), Rule::ApplicationName);
+    assert_eq!(
+        verdict.evidence.application.as_deref(),
+        Some("PrusaSlicer-2.9.0")
+    );
+}
+
+#[test]
 fn prusaslicer_project_with_a_custom_printer_uses_the_application_tag() {
     let verdict = detect_fixture(
         ThreeMf::new()
