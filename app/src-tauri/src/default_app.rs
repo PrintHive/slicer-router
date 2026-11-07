@@ -36,7 +36,8 @@ const EXAMPLE_FILE_NAME: &str = "Slicer Router example.3mf";
 /// Who opens `.3mf` files, or `None` when the platform cannot say, so the window
 /// shows nothing rather than a guess. `bundle_id` is this app's identifier.
 pub fn status(bundle_id: &str) -> Option<DefaultApp> {
-    mac_status(bundle_id).or_else(|| windows_status(user_choice_prog_id().as_deref()))
+    mac_status(bundle_id)
+        .or_else(|| windows_status(user_choice_prog_id().as_deref(), &own_exe_names()))
 }
 
 fn mac_status(bundle_id: &str) -> Option<DefaultApp> {
@@ -79,10 +80,29 @@ fn default_app() -> DefaultApp {
     }
 }
 
+/// The file names this app's executable has: the one cargo builds, which the
+/// installer ships, and the one actually running.
+fn own_exe_names() -> Vec<String> {
+    let mut names = vec![concat!(env!("CARGO_PKG_NAME"), ".exe").to_owned()];
+    let running = std::env::current_exe()
+        .ok()
+        .and_then(|path| Some(path.file_name()?.to_string_lossy().into_owned()));
+    names.extend(running);
+    names
+}
+
 /// The class Windows opens `.3mf` with, from `None` for no explicit choice.
-fn windows_status(prog_id: Option<&str>) -> Option<DefaultApp> {
+///
+/// Slicer Router is the default under the file class its installer registers, or
+/// under `Applications\<exe>`, which is what Open with, Always writes when the
+/// person picks the app from the list instead.
+fn windows_status(prog_id: Option<&str>, own_exes: &[String]) -> Option<DefaultApp> {
     let prog_id = prog_id?;
-    if prog_id.eq_ignore_ascii_case(WINDOWS_PROG_ID) {
+    let picked_from_the_list = prog_id.split_once('\\').is_some_and(|(class, exe)| {
+        class.eq_ignore_ascii_case("Applications")
+            && own_exes.iter().any(|own| own.eq_ignore_ascii_case(exe))
+    });
+    if prog_id.eq_ignore_ascii_case(WINDOWS_PROG_ID) || picked_from_the_list {
         return Some(default_app());
     }
     Some(DefaultApp {
@@ -109,14 +129,28 @@ fn windows_app_name(prog_id: &str) -> String {
 }
 
 /// The class the person chose for `.3mf` in Open with, if they chose one.
-#[cfg(windows)]
+///
+/// Newer Windows 10 and 11 builds keep it under `UserChoiceLatest` and leave
+/// `UserChoice` stale, so that one is read first.
 fn user_choice_prog_id() -> Option<String> {
+    first_prog_id(read_prog_id("UserChoiceLatest"), read_prog_id("UserChoice"))
+}
+
+fn first_prog_id(latest: Option<String>, legacy: Option<String>) -> Option<String> {
+    [latest, legacy]
+        .into_iter()
+        .flatten()
+        .find(|prog_id| !prog_id.trim().is_empty())
+}
+
+#[cfg(windows)]
+fn read_prog_id(key: &str) -> Option<String> {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
     use winreg::RegKey;
 
     RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey_with_flags(
-            r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.3mf\UserChoice",
+            format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.3mf\{key}"),
             KEY_READ,
         )
         .ok()?
@@ -125,7 +159,7 @@ fn user_choice_prog_id() -> Option<String> {
 }
 
 #[cfg(not(windows))]
-fn user_choice_prog_id() -> Option<String> {
+fn read_prog_id(_key: &str) -> Option<String> {
     None
 }
 
@@ -252,24 +286,53 @@ mod tests {
         assert_eq!(name("com.example.mystery", None), "com.example.mystery");
     }
 
+    fn exes() -> Vec<String> {
+        vec![
+            "slicer-router-app.exe".to_owned(),
+            "Slicer Router.exe".to_owned(),
+        ]
+    }
+
     #[test]
     fn windows_knows_slicer_router_by_its_file_class() {
         assert_eq!(
-            windows_status(Some("PrintHive.SlicerRouter.3mf")),
+            windows_status(Some("PrintHive.SlicerRouter.3mf"), &exes()),
             Some(default_app())
         );
     }
 
     #[test]
+    fn windows_knows_slicer_router_picked_from_the_open_with_list() {
+        for prog_id in [
+            r"Applications\slicer-router-app.exe",
+            r"applications\Slicer-Router-App.EXE",
+            r"Applications\Slicer Router.exe",
+        ] {
+            assert_eq!(
+                windows_status(Some(prog_id), &exes()),
+                Some(default_app()),
+                "{prog_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn another_app_picked_from_the_list_is_not_slicer_router() {
+        let status = windows_status(Some(r"Applications\slicer-router-app2.exe"), &exes());
+        assert_eq!(status.map(|s| s.is_default), Some(false));
+        assert!(own_exe_names().contains(&"slicer-router-app.exe".to_owned()));
+    }
+
+    #[test]
     fn windows_names_a_slicer_from_its_class_and_otherwise_says_another_app() {
-        let name = |prog_id| windows_status(Some(prog_id)).unwrap().current_name;
+        let name = |prog_id| windows_status(Some(prog_id), &exes()).unwrap().current_name;
         assert_eq!(name(r"Applications\orca-slicer.exe"), "OrcaSlicer");
         assert_eq!(name(r"Applications\bambu-studio.exe"), "Bambu Studio");
         assert_eq!(name("Snapmaker_Orca.3mf"), "Snapmaker Orca");
         assert_eq!(name("PrusaSlicer.3mf"), "PrusaSlicer");
         assert_eq!(name("AppX7z4x3hw3nb0b0aypgvgdhsksh4z7q7qk"), "another app");
         assert!(
-            !windows_status(Some("Applications\\cura.exe"))
+            !windows_status(Some("Applications\\cura.exe"), &exes())
                 .unwrap()
                 .is_default
         );
@@ -277,7 +340,16 @@ mod tests {
 
     #[test]
     fn windows_with_no_explicit_choice_says_nothing() {
-        assert_eq!(windows_status(None), None);
+        assert_eq!(windows_status(None, &exes()), None);
+    }
+
+    #[test]
+    fn the_newer_user_choice_key_wins_and_the_older_one_is_the_fallback() {
+        let some = |text: &str| Some(text.to_owned());
+        assert_eq!(first_prog_id(some("new"), some("old")), some("new"));
+        assert_eq!(first_prog_id(None, some("old")), some("old"));
+        assert_eq!(first_prog_id(some("  "), some("old")), some("old"));
+        assert_eq!(first_prog_id(None, None), None);
     }
 
     #[test]
