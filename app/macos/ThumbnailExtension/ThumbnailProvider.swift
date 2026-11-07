@@ -151,7 +151,7 @@ func drawCard(named name: String, in canvas: CGRect) {
         height: inner.height - side * 0.3 - labelHeight
     )
     let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
-    let height = min(title.boundingRect(with: free.size, options: options).height, free.height)
+    let height = max(0, min(title.boundingRect(with: free.size, options: options).height, free.height))
     title.draw(
         with: CGRect(x: free.minX, y: free.midY - height / 2, width: free.width, height: height),
         options: options

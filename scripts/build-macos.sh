@@ -42,6 +42,10 @@ fi
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 target=aarch64-apple-darwin
+if [[ "$(uname -m)" != arm64 ]]; then
+  echo "error: this script builds $target and must run on an arm64 Mac" >&2
+  exit 1
+fi
 export MACOSX_DEPLOYMENT_TARGET=11.0
 extension_src="$repo/app/macos/ThumbnailExtension"
 app="$repo/target/$target/release/bundle/macos/Slicer Router.app"
@@ -57,6 +61,10 @@ echo "==> Slicer Router.app"
   env -u APPLE_SIGNING_IDENTITY -u APPLE_CERTIFICATE -u APPLE_ID -u APPLE_PASSWORD \
     -u APPLE_TEAM_ID -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH \
     cargo tauri build --bundles app --target "$target")
+if [[ ! -d "$app" ]]; then
+  echo "error: cargo tauri build did not produce $app" >&2
+  exit 1
+fi
 version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist")
 
 echo "==> SlicerRouterThumbnail.appex $version"

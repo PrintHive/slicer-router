@@ -74,7 +74,7 @@ impl Snapshot {
             return Ok(false);
         }
         fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!("{FILE_NAME}.tmp"));
+        let tmp = dir.join(format!("{FILE_NAME}.{}.tmp", std::process::id()));
         fs::write(&tmp, json)?;
         fs::rename(&tmp, &path)?;
         Ok(true)

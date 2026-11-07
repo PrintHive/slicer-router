@@ -58,7 +58,9 @@ pub unsafe extern "C" fn sr_thumbnail(file: *const c_char, home: *const c_char) 
     let (file, home) = unsafe { (path_arg(file), path_arg(home)) };
     match file {
         Some(file) => {
-            let (opener_app, image) = thumbnail(file, home);
+            // A panic must not unwind into Swift; fall back to the plain card.
+            let (opener_app, image) =
+                std::panic::catch_unwind(|| thumbnail(file, home)).unwrap_or((None, None));
             SrThumbnail::new(opener_app, image)
         }
         None => SrThumbnail::new(None, None),

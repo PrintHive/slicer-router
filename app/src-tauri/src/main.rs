@@ -125,7 +125,7 @@ fn refresh_thumbnails(installed: Vec<InstalledSlicer>, config: &Config) {
                 .args(["-r", "cache"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status();
+                .spawn();
             if let Err(err) = reset {
                 eprintln!("slicer-router: cannot reset the Quick Look cache: {err}");
             }
@@ -357,11 +357,11 @@ fn choose(
         let released = pending::resolve(&path, &mut pending, detected, slicer)?;
         (released, pending.is_empty())
     };
-    refresh_thumbnails(installed.clone(), &load_config_or_default());
     let failures: Vec<String> = released
         .iter()
         .filter_map(|file| launch_file(target, file).err())
         .collect();
+    refresh_thumbnails(installed.clone(), &load_config_or_default());
     if !failures.is_empty() {
         return Err(failures.join("\n"));
     }

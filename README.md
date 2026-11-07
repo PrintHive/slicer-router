@@ -142,8 +142,8 @@ installed, the corner shows Slicer Router's own icon.
 The preview is `Metadata/plate_1.png` (Bambu Studio, OrcaSlicer, Snapmaker Orca),
 then `Metadata/thumbnail.png` (PrusaSlicer), then whatever image the package
 names in `_rels/.rels`. MakerWorld downloads name a 240 by 180 cover there, so the
-512 by 512 plate render is preferred. Images over 4 MiB, or over 16 megapixels,
-are skipped.
+512 by 512 plate render is preferred. Images over 4 MiB, or with more pixels than
+4096 by 4096, are skipped.
 
 How it fits together:
 
