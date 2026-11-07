@@ -3248,6 +3248,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "slicer-router-macos"
+version = "0.2.0"
+dependencies = [
+ "core-foundation",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
