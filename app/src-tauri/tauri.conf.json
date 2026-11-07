@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Slicer Router",
-  "version": "0.1.0",
   "identifier": "com.printhive.slicer-router",
   "build": {
     "frontendDist": "../ui"
