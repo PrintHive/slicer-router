@@ -1,0 +1,183 @@
+//! Decide which slicer a `.3mf` belongs to, from the evidence in the file.
+//!
+//! Rules run in the order of [`RULES`]. The first one that names a slicer wins.
+//! "Printer profile wins" is that ordering: the printer a project was prepared
+//! for outranks which program happened to save it.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::evidence::{read_evidence, DetectError, Evidence};
+use crate::slicer::Slicer;
+
+/// Which rule produced a [`Verdict`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Rule {
+    /// The printer model or profile name belongs to one slicer's vendor.
+    PrinterProfile,
+    /// The `Application` metadata names a slicer unambiguously.
+    ApplicationName,
+    /// The `Application` metadata is `BambuStudio-<version>` with a version
+    /// that is not Bambu Studio's four-part release number. OrcaSlicer and its
+    /// forks write that tag for compatibility, so the file is treated as OrcaSlicer's.
+    ApplicationBambuFork,
+    /// The archive has PrusaSlicer's `Slic3r_PE.config` and nothing else decided.
+    PrusaConfigFile,
+    /// No signal. The user's default slicer should open the file.
+    NoSignal,
+}
+
+/// The outcome of [`detect`] or [`classify`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Verdict {
+    /// The slicer the file belongs to, or `None` when nothing identified it.
+    pub slicer: Option<Slicer>,
+    /// The rule that decided, for debugging and `--json` output.
+    pub rule: Rule,
+    /// What was read from the file.
+    pub evidence: Evidence,
+}
+
+type RuleFn = fn(&Evidence) -> Option<(Slicer, Rule)>;
+
+/// Detection rules in priority order.
+const RULES: [RuleFn; 3] = [by_printer_profile, by_application, by_prusa_config_file];
+
+/// Detect the slicer for the `.3mf` at `path`.
+///
+/// Fails only when the file is not a readable zip archive; see [`read_evidence`].
+pub fn detect(path: &Path) -> Result<Verdict, DetectError> {
+    Ok(classify(read_evidence(path)?))
+}
+
+/// Apply the detection rules to already-read evidence.
+pub fn classify(evidence: Evidence) -> Verdict {
+    let fired = RULES.iter().find_map(|rule| rule(&evidence));
+    match fired {
+        Some((slicer, rule)) => Verdict {
+            slicer: Some(slicer),
+            rule,
+            evidence,
+        },
+        None => Verdict {
+            slicer: None,
+            rule: Rule::NoSignal,
+            evidence,
+        },
+    }
+}
+
+impl Verdict {
+    /// A verdict with no signal, for callers that choose to route a file they
+    /// could not read the same way as a file with no metadata.
+    pub fn no_signal() -> Self {
+        classify(Evidence::default())
+    }
+}
+
+fn by_printer_profile(evidence: &Evidence) -> Option<(Slicer, Rule)> {
+    let printer = &evidence.printer;
+    let names: Vec<String> = [&printer.model, &printer.settings_id, &printer.vendor]
+        .into_iter()
+        .flatten()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    let model = printer.model.as_deref().map(str::to_ascii_lowercase);
+    Slicer::ALL
+        .into_iter()
+        .find(|slicer| {
+            let patterns = &slicer.spec().printers;
+            patterns
+                .name_contains
+                .iter()
+                .any(|needle| names.iter().any(|name| name.contains(needle)))
+                || model
+                    .as_deref()
+                    .is_some_and(|model| patterns.exact_models.contains(&model))
+        })
+        .map(|slicer| (slicer, Rule::PrinterProfile))
+}
+
+/// How the version after an `Application` prefix must look for a row to match.
+#[derive(Clone, Copy)]
+enum Release {
+    Any,
+    /// Bambu Studio's zero-padded four-part release, for example `02.08.02.61`.
+    BambuFourPart,
+    /// Any version that is not [`Release::BambuFourPart`].
+    NotBambuFourPart,
+}
+
+impl Release {
+    fn matches(self, version: &str) -> bool {
+        let four_part = {
+            let parts: Vec<&str> = version.split('.').collect();
+            parts.len() == 4
+                && parts
+                    .iter()
+                    .all(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_digit()))
+        };
+        match self {
+            Release::Any => true,
+            Release::BambuFourPart => four_part,
+            Release::NotBambuFourPart => !four_part,
+        }
+    }
+}
+
+/// `Application` metadata values, in match order.
+///
+/// OrcaSlicer 2.3 and Snapmaker Orca 2.2 write `BambuStudio-<their own version>`,
+/// a three-part number, which is why the Bambu prefix has two rows.
+const APPLICATION_SIGNATURES: &[(&str, Release, Slicer, Rule)] = &[
+    (
+        "BambuStudio-",
+        Release::BambuFourPart,
+        Slicer::BambuStudio,
+        Rule::ApplicationName,
+    ),
+    (
+        "BambuStudio-",
+        Release::NotBambuFourPart,
+        Slicer::OrcaSlicer,
+        Rule::ApplicationBambuFork,
+    ),
+    (
+        "OrcaSlicer-",
+        Release::Any,
+        Slicer::OrcaSlicer,
+        Rule::ApplicationName,
+    ),
+    (
+        "Snapmaker_Orca-",
+        Release::Any,
+        Slicer::SnapmakerOrca,
+        Rule::ApplicationName,
+    ),
+    (
+        "PrusaSlicer-",
+        Release::Any,
+        Slicer::PrusaSlicer,
+        Rule::ApplicationName,
+    ),
+];
+
+fn by_application(evidence: &Evidence) -> Option<(Slicer, Rule)> {
+    let application = evidence.application.as_deref()?;
+    APPLICATION_SIGNATURES
+        .iter()
+        .find_map(|&(prefix, release, slicer, rule)| {
+            let head = application.get(..prefix.len())?;
+            let version = application.get(prefix.len()..)?;
+            (head.eq_ignore_ascii_case(prefix) && release.matches(version))
+                .then_some((slicer, rule))
+        })
+}
+
+fn by_prusa_config_file(evidence: &Evidence) -> Option<(Slicer, Rule)> {
+    evidence
+        .prusa_config_present
+        .then_some((Slicer::PrusaSlicer, Rule::PrusaConfigFile))
+}

@@ -49,7 +49,8 @@ pub struct PrinterProfile {
     /// `inherits`. Kept for debugging only: it often names a process or
     /// filament preset, so no detection rule reads it.
     pub inherits: Option<String>,
-    /// `printer_vendor`, when the slicer writes one.
+    /// `printer_vendor`, or the `PRINTER_VENDOR_<NAME>` marker in PrusaSlicer's
+    /// `printer_notes`, when either is present.
     pub vendor: Option<String>,
 }
 
@@ -199,8 +200,12 @@ fn read_json_printer(reader: impl Read) -> Result<PrinterProfile, serde_json::Er
 }
 
 /// PrusaSlicer stores its config as `; key = value` comment lines.
+///
+/// Its `printer_vendor` is usually empty, so the vendor falls back to the
+/// `PRINTER_VENDOR_<NAME>` marker that Prusa printer presets put in `printer_notes`.
 fn read_ini_printer(reader: impl BufRead) -> PrinterProfile {
     let mut printer = PrinterProfile::default();
+    let mut notes = None;
     for line in reader.split(b'\n').map_while(Result::ok) {
         let line = String::from_utf8_lossy(&line);
         let Some((key, value)) = line
@@ -214,14 +219,27 @@ fn read_ini_printer(reader: impl BufRead) -> PrinterProfile {
             "printer_model" => &mut printer.model,
             "printer_settings_id" => &mut printer.settings_id,
             "printer_vendor" => &mut printer.vendor,
+            "printer_notes" => &mut notes,
             _ => continue,
         };
-        slot.get_or_insert_with(String::new);
-        if slot.as_deref() == Some("") {
+        if slot.is_none() {
             *slot = non_empty(value);
         }
     }
+    if printer.vendor.is_none() {
+        printer.vendor = notes.as_deref().and_then(vendor_marker);
+    }
     printer
+}
+
+fn vendor_marker(notes: &str) -> Option<String> {
+    const MARKER: &str = "PRINTER_VENDOR_";
+    let start = notes.find(MARKER)? + MARKER.len();
+    let name: String = notes[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    (!name.is_empty()).then_some(name)
 }
 
 fn non_empty(s: &str) -> Option<String> {
@@ -262,6 +280,13 @@ mod tests {
             Some("Original Prusa MK4S 0.4 nozzle")
         );
         assert_eq!(printer.vendor, None);
+    }
+
+    #[test]
+    fn ini_vendor_falls_back_to_the_notes_marker() {
+        let ini = "; printer_notes = Don't remove these keywords.\\nPRINTER_VENDOR_PRUSA3D\\nPRINTER_MODEL_MK3\\n\n; printer_vendor =\n";
+        let printer = read_ini_printer(Cursor::new(ini));
+        assert_eq!(printer.vendor.as_deref(), Some("PRUSA3D"));
     }
 
     #[test]

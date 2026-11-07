@@ -1,0 +1,289 @@
+mod common;
+
+use common::ThreeMf;
+use slicer_router_core::{classify, detect, DetectError, Evidence, Rule, Slicer, Verdict};
+use tempfile::TempDir;
+
+fn detect_fixture(fixture: ThreeMf) -> Verdict {
+    let dir = TempDir::new().unwrap();
+    let path = fixture.write(dir.path(), "fixture.3mf");
+    detect(&path).unwrap()
+}
+
+fn assert_verdict(verdict: &Verdict, slicer: Option<Slicer>, rule: Rule) {
+    assert_eq!(
+        (verdict.slicer, verdict.rule),
+        (slicer, rule),
+        "evidence: {:?}",
+        verdict.evidence
+    );
+}
+
+#[test]
+fn genuine_bambu_studio_project() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("BambuStudio-02.08.02.61"))
+            .project_settings("Bambu Lab P1S", "Bambu Lab P1S 0.4 nozzle"),
+    );
+    assert_verdict(&verdict, Some(Slicer::BambuStudio), Rule::PrinterProfile);
+    assert_eq!(
+        verdict.evidence.application.as_deref(),
+        Some("BambuStudio-02.08.02.61")
+    );
+}
+
+#[test]
+fn bambu_release_number_alone_means_bambu_studio() {
+    let verdict = detect_fixture(ThreeMf::new().model(Some("BambuStudio-01.10.01.50")));
+    assert_verdict(&verdict, Some(Slicer::BambuStudio), Rule::ApplicationName);
+}
+
+#[test]
+fn orcaslicer_saving_a_snapmaker_u1_project_goes_to_snapmaker_orca() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("BambuStudio-2.3.1"))
+            .project_settings("Snapmaker U1", "Snapmaker U1 (0.4 nozzle)"),
+    );
+    assert_verdict(&verdict, Some(Slicer::SnapmakerOrca), Rule::PrinterProfile);
+}
+
+#[test]
+fn snapmaker_orca_default_project() {
+    let verdict = detect_fixture(ThreeMf::new().model(Some("Snapmaker_Orca-2.4.0")));
+    assert_verdict(&verdict, Some(Slicer::SnapmakerOrca), Rule::ApplicationName);
+}
+
+#[test]
+fn bambu_tag_with_three_part_version_is_a_fork_not_bambu() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("BambuStudio-2.3.1"))
+            .project_settings("Voron 2.4 350", "Voron 2.4 350 0.4 nozzle"),
+    );
+    assert_verdict(
+        &verdict,
+        Some(Slicer::OrcaSlicer),
+        Rule::ApplicationBambuFork,
+    );
+}
+
+#[test]
+fn explicit_orcaslicer_application_with_a_third_party_printer() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("OrcaSlicer-2.3.1"))
+            .project_settings("Voron 2.4 350", "Voron 2.4 350 0.4 nozzle"),
+    );
+    assert_verdict(&verdict, Some(Slicer::OrcaSlicer), Rule::ApplicationName);
+}
+
+#[test]
+fn printer_profile_beats_the_saving_application() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("BambuStudio-2.3.1"))
+            .project_settings("Bambu Lab P1S", "Bambu Lab P1S 0.4 nozzle"),
+    );
+    assert_verdict(&verdict, Some(Slicer::BambuStudio), Rule::PrinterProfile);
+}
+
+#[test]
+fn prusaslicer_project_with_a_prusa_printer() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("PrusaSlicer-2.9.0"))
+            .prusa_config("MK4S", "Original Prusa MK4S 0.4 nozzle"),
+    );
+    assert_verdict(&verdict, Some(Slicer::PrusaSlicer), Rule::PrinterProfile);
+    assert!(verdict.evidence.prusa_config_present);
+}
+
+#[test]
+fn prusaslicer_project_with_a_custom_printer_uses_the_application_tag() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("PrusaSlicer-2.9.0"))
+            .prusa_config("", "My printer"),
+    );
+    assert_verdict(&verdict, Some(Slicer::PrusaSlicer), Rule::ApplicationName);
+}
+
+#[test]
+fn slic3r_pe_config_alone_means_prusaslicer() {
+    let verdict = detect_fixture(ThreeMf::new().model(None).prusa_config("", ""));
+    assert_verdict(&verdict, Some(Slicer::PrusaSlicer), Rule::PrusaConfigFile);
+}
+
+#[test]
+fn plain_model_with_no_metadata_has_no_verdict() {
+    let verdict = detect_fixture(ThreeMf::new().model(None));
+    assert_verdict(&verdict, None, Rule::NoSignal);
+    assert_eq!(verdict.evidence, Evidence::default());
+}
+
+#[test]
+fn unknown_application_with_no_printer_has_no_verdict() {
+    let verdict = detect_fixture(ThreeMf::new().model(Some("Cura-5.7.0")));
+    assert_verdict(&verdict, None, Rule::NoSignal);
+    assert_eq!(verdict.evidence.application.as_deref(), Some("Cura-5.7.0"));
+}
+
+#[test]
+fn gcode_3mf_is_routed_like_any_project() {
+    let dir = TempDir::new().unwrap();
+    let path = ThreeMf::new()
+        .model(Some("BambuStudio-02.02.01.60"))
+        .project_settings("Bambu Lab H2D", "Bambu Lab H2D 0.4 nozzle")
+        .entry("Metadata/plate_1.gcode", b"G28\n".to_vec())
+        .write(dir.path(), "benchy.gcode.3mf");
+    let verdict = detect(&path).unwrap();
+    assert_verdict(&verdict, Some(Slicer::BambuStudio), Rule::PrinterProfile);
+}
+
+#[test]
+fn settings_values_may_be_one_element_arrays() {
+    let verdict = detect_fixture(ThreeMf::new().model(Some("BambuStudio-2.3.1")).raw_project_settings(
+        br#"{"printer_model":["Snapmaker J1"],"printer_settings_id":["Snapmaker J1 (0.4 nozzle)"]}"#,
+    ));
+    assert_verdict(&verdict, Some(Slicer::SnapmakerOrca), Rule::PrinterProfile);
+    assert_eq!(
+        verdict.evidence.printer.model.as_deref(),
+        Some("Snapmaker J1")
+    );
+}
+
+#[test]
+fn unreadable_settings_fall_back_to_the_application_tag() {
+    let verdict = detect_fixture(
+        ThreeMf::new()
+            .model(Some("Snapmaker_Orca-2.4.0"))
+            .raw_project_settings(b"{ this is not json"),
+    );
+    assert_verdict(&verdict, Some(Slicer::SnapmakerOrca), Rule::ApplicationName);
+    assert_eq!(verdict.evidence.warnings.len(), 1, "{:?}", verdict.evidence);
+}
+
+#[test]
+fn entry_names_are_matched_ignoring_case() {
+    let verdict = detect_fixture(
+        ThreeMf::new().entry(
+            "3d/3DModel.model",
+            b"<model><metadata name=\"Application\">PrusaSlicer-2.9.0</metadata><resources/></model>"
+                .to_vec(),
+        ),
+    );
+    assert_verdict(&verdict, Some(Slicer::PrusaSlicer), Rule::ApplicationName);
+}
+
+#[test]
+fn only_the_head_of_the_model_is_read() {
+    // Stored entry whose tail is corrupted after the zip CRC was written. A reader
+    // that consumed the whole entry would fail the CRC check. The metadata at the
+    // top must still be found, with no warning.
+    let padding = "Z".repeat(3 << 20);
+    let dir = TempDir::new().unwrap();
+    let path = ThreeMf::new()
+        .stored_entry(
+            "3D/3dmodel.model",
+            format!(
+                "<model><metadata name=\"Application\">Snapmaker_Orca-2.4.0</metadata>\
+                 <resources><!-- {padding} --></resources></model>"
+            )
+            .into_bytes(),
+        )
+        .write(dir.path(), "stored.3mf");
+    let mut bytes = std::fs::read(&path).unwrap();
+    let tail = bytes
+        .windows(8)
+        .rposition(|w| w == b"ZZZZZZZZ")
+        .expect("padding present");
+    bytes[tail..tail + 8].copy_from_slice(b"YYYYYYYY");
+    std::fs::write(&path, bytes).unwrap();
+
+    let verdict = detect(&path).unwrap();
+    assert_verdict(&verdict, Some(Slicer::SnapmakerOrca), Rule::ApplicationName);
+    assert!(
+        verdict.evidence.warnings.is_empty(),
+        "{:?}",
+        verdict.evidence
+    );
+}
+
+#[test]
+fn garbage_file_is_an_error_not_a_panic() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("garbage.3mf");
+    std::fs::write(&path, b"this is not a zip archive at all").unwrap();
+    assert!(matches!(detect(&path), Err(DetectError::NotAZip { .. })));
+}
+
+#[test]
+fn truncated_zip_is_an_error_not_a_panic() {
+    let dir = TempDir::new().unwrap();
+    let full = ThreeMf::new()
+        .model(Some("BambuStudio-02.08.02.61"))
+        .write(dir.path(), "full.3mf");
+    let bytes = std::fs::read(&full).unwrap();
+    let cut = dir.path().join("cut.3mf");
+    std::fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+    assert!(matches!(detect(&cut), Err(DetectError::NotAZip { .. })));
+}
+
+#[test]
+fn empty_file_is_an_error() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("empty.3mf");
+    std::fs::write(&path, b"").unwrap();
+    assert!(matches!(detect(&path), Err(DetectError::NotAZip { .. })));
+}
+
+#[test]
+fn missing_file_is_an_io_error() {
+    let dir = TempDir::new().unwrap();
+    let err = detect(&dir.path().join("nope.3mf")).unwrap_err();
+    assert!(matches!(err, DetectError::Io { .. }), "{err}");
+}
+
+#[test]
+fn printer_names_attribute_to_the_right_vendor() {
+    let cases: &[(&str, &str, Option<Slicer>)] = &[
+        ("Snapmaker U1", "", Some(Slicer::SnapmakerOrca)),
+        ("", "Snapmaker J1 (0.4 nozzle)", Some(Slicer::SnapmakerOrca)),
+        ("Snapmaker Artisan", "", Some(Slicer::SnapmakerOrca)),
+        ("Bambu Lab X1 Carbon", "", Some(Slicer::BambuStudio)),
+        ("Bambu Lab A1 mini", "", Some(Slicer::BambuStudio)),
+        ("", "Bambu Lab H2D 0.4 nozzle", Some(Slicer::BambuStudio)),
+        (
+            "",
+            "Original Prusa MK4S 0.4 nozzle",
+            Some(Slicer::PrusaSlicer),
+        ),
+        ("Prusa MK3S", "", Some(Slicer::PrusaSlicer)),
+        ("MK4S", "", Some(Slicer::PrusaSlicer)),
+        ("MINI", "", Some(Slicer::PrusaSlicer)),
+        ("XL", "", Some(Slicer::PrusaSlicer)),
+        ("CORE One", "", Some(Slicer::PrusaSlicer)),
+        ("Voron 2.4 350", "", None),
+        ("Creality Ender-3 V3", "", None),
+        ("Generic", "", None),
+        ("", "", None),
+    ];
+    for &(model, settings_id, expected) in cases {
+        let mut evidence = Evidence::default();
+        evidence.printer.model = (!model.is_empty()).then(|| model.to_owned());
+        evidence.printer.settings_id = (!settings_id.is_empty()).then(|| settings_id.to_owned());
+        let verdict = classify(evidence);
+        assert_eq!(verdict.slicer, expected, "{model:?} / {settings_id:?}");
+    }
+}
+
+#[test]
+fn verdict_serializes_with_kebab_case_names() {
+    let verdict = detect_fixture(ThreeMf::new().model(Some("BambuStudio-2.3.1")));
+    let json = serde_json::to_value(&verdict).unwrap();
+    assert_eq!(json["slicer"], "orca-slicer");
+    assert_eq!(json["rule"], "application-bambu-fork");
+    assert_eq!(json["evidence"]["application"], "BambuStudio-2.3.1");
+}
