@@ -1,0 +1,20 @@
+[package]
+name = "slicer-router-cli"
+description = "Command line front end for slicer-router."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "slicer-router"
+path = "src/main.rs"
+
+[dependencies]
+slicer-router-core.workspace = true
+clap = { version = "4", features = ["derive"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

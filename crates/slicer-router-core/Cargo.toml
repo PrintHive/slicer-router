@@ -1,0 +1,24 @@
+[package]
+name = "slicer-router-core"
+description = "Detect which slicer authored a .3mf file and route it to the right installed slicer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quick-xml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/slicer-router-core", "crates/slicer-router-cli"]
+default-members = ["crates/slicer-router-core", "crates/slicer-router-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/PrintHive/slicer-router"
+rust-version = "1.88"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+quick-xml = "0.42"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+slicer-router-core = { path = "crates/slicer-router-core" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
