@@ -17,7 +17,8 @@ const OVERRIDE_KINDS = [
 // failures, config and default-app status in `data`.
 //
 // One sheet shows at a time. `sheet` is the mounted one: null, or
-// { kind: "question" | "failure", key }. A question outranks failures, and
+// { kind: "question" | "failure", key }, and for a failure sheet the `files` it
+// lists, which is what its buttons act on. A question outranks failures, and
 // `later` hides the question until the person asks for it again. `leaving` is
 // set from the moment a sheet starts to exit until the action that closed it has
 // finished, and nothing new mounts in between.
@@ -451,6 +452,7 @@ function openSheet(want) {
 function fillSheet(sheet, want) {
   const focused = document.activeElement;
   const key = sheet.contains(focused) ? focused.dataset.key : null;
+  if (want.kind === "failure") ui.sheet.files = ui.data.failures.map((failure) => failure.file);
   const { title, body, close } =
     want.kind === "question"
       ? questionSheet(ui.data.pending.find((group) => questionKey(group) === want.key))
@@ -645,23 +647,26 @@ function reopenQuestion() {
 }
 
 async function dismissFailures() {
-  await leaveSheet(() => command("dismiss_failures"));
+  const { files } = ui.sheet;
+  await leaveSheet(() => command("dismiss_failures", { files }));
   focusSelectedTile();
 }
 
 async function retryFailures() {
   if (ui.leaving) return;
-  const retrying = ui.data.failures.filter((failure) => failure.retryable);
+  const { files: shown } = ui.sheet;
+  const retrying = ui.data.failures.filter((failure) => failure.retryable && shown.includes(failure.file));
   const names = unique(retrying.map((failure) => failure.slicer_name));
-  const retried = await leaveSheet(() => command("retry_failures"));
+  const retried = await leaveSheet(() => command("retry_failures", { files: shown }));
   focusSelectedTile();
   if (retried && !failureShowing()) toast(`Trying ${files(retrying.length)} again in ${names.join(" and ")}`);
 }
 
 async function openElsewhere(slicerId) {
   if (ui.leaving) return;
-  const count = ui.data.failures.length;
-  const opened = await leaveSheet(() => command("open_failures_in", { slicer: slicerId }));
+  const { files: shown } = ui.sheet;
+  const count = shown.length;
+  const opened = await leaveSheet(() => command("open_failures_in", { files: shown, slicer: slicerId }));
   focusSelectedTile();
   if (opened && !failureShowing()) toast(`Opening ${files(count)} in ${slicerName(slicerId)}`);
 }

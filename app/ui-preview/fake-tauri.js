@@ -131,18 +131,20 @@
       model.default_app = { is_default: true, current_name: "Slicer Router" };
     },
     reveal_example_3mf() {},
-    async retry_failures() {
+    async retry_failures({ files }) {
       await wait(400);
-      model.failures = model.failures.filter((f) => !f.retryable);
+      model.failures = model.failures.filter((f) => !(files.includes(f.file) && f.retryable));
       emit();
     },
-    async open_failures_in({ slicer }) {
+    async open_failures_in({ files, slicer }) {
       await wait(400);
-      model.failures = model.failures.flatMap((f) => launchIn([f.file], slicer));
+      const opened = model.failures.filter((f) => files.includes(f.file));
+      model.failures = model.failures.filter((f) => !files.includes(f.file));
+      model.failures.push(...opened.flatMap((f) => launchIn([f.file], slicer)));
       emit();
     },
-    dismiss_failures() {
-      model.failures = [];
+    dismiss_failures({ files }) {
+      model.failures = model.failures.filter((f) => !files.includes(f.file));
     },
   };
 

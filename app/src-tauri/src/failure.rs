@@ -79,6 +79,16 @@ impl Failure {
     }
 }
 
+/// Remove from `failures`, and return, the ones for the files the person was
+/// shown (as the window displays them). A failure that arrived since stays.
+pub fn take_shown(failures: &mut Vec<Failure>, shown: &[String]) -> Vec<Failure> {
+    let (taken, kept) = std::mem::take(failures)
+        .into_iter()
+        .partition(|failure| shown.contains(&failure.file.display().to_string()));
+    *failures = kept;
+    taken
+}
+
 /// Why `err` stopped a slicer from opening a file, in a few words.
 pub fn launch_reason(err: &LaunchError) -> String {
     match err {
@@ -355,5 +365,25 @@ mod tests {
                 retryable: true,
             }]
         );
+    }
+
+    #[test]
+    fn only_the_failures_the_person_was_shown_are_taken() {
+        let prusa = present(PrusaSlicer);
+        let (a, b, c) = (
+            real_file("shown", "a.3mf"),
+            real_file("shown", "b.3mf"),
+            real_file("shown", "c.3mf"),
+        );
+        let mut failures = vec![failed(&a, &prusa), failed(&b, &prusa), failed(&c, &prusa)];
+        let shown = [a.display().to_string(), c.display().to_string()];
+
+        let taken = take_shown(&mut failures, &shown);
+
+        assert_eq!(
+            summary(&taken),
+            [("a.3mf".to_owned(), true), ("c.3mf".to_owned(), true)]
+        );
+        assert_eq!(summary(&failures), [("b.3mf".to_owned(), true)]);
     }
 }

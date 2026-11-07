@@ -474,37 +474,60 @@ fn set_override(detected: Slicer, slicer: Option<Slicer>) -> Result<(), String> 
     Ok(())
 }
 
+/// Forget the failures for the files the window showed. A failure that arrived
+/// since stays, so the window still shows it.
 #[tauri::command]
-fn dismiss_failures(shared: State<'_, Shared>) {
-    shared.failures.lock().unwrap().clear();
+fn dismiss_failures(shared: State<'_, Shared>, files: Vec<String>) {
+    failure::take_shown(&mut shared.failures.lock().unwrap(), &files);
 }
 
-/// Launch the failures that can work again in the slicer that failed them. What
-/// still fails comes back as failures.
+/// Launch the shown failures that can work again in the slicer that failed
+/// them. What still fails comes back as failures.
 #[tauri::command]
-fn retry_failures(app: AppHandle, shared: State<'_, Shared>) {
-    let failures = std::mem::take(&mut *shared.failures.lock().unwrap());
-    let routed = files_of(&failures);
-    let remaining = failure::retry(failures, &discover_installed(), launch_file);
-    finish_recovery(&app, &shared, &routed, remaining);
+fn retry_failures(app: AppHandle, shared: State<'_, Shared>, files: Vec<String>) {
+    retry_shown(&shared, &discover_installed(), &files, launch_file);
+    settle(&app, &shared);
 }
 
-/// Open every failed file in `slicer`, this once. The config is not changed.
+/// Open every shown failure in `slicer`, this once. The config is not changed.
 #[tauri::command]
 fn open_failures_in(
     app: AppHandle,
     shared: State<'_, Shared>,
+    files: Vec<String>,
     slicer: Slicer,
 ) -> Result<(), String> {
     let target = discover_installed()
         .into_iter()
         .find(|i| i.slicer == slicer)
         .ok_or_else(|| format!("{slicer} is not installed"))?;
-    let failures = std::mem::take(&mut *shared.failures.lock().unwrap());
-    let routed = files_of(&failures);
-    let remaining = failure::open_in(failures, &target, launch_file);
-    finish_recovery(&app, &shared, &routed, remaining);
+    open_shown_in(&shared, &target, &files, launch_file);
+    settle(&app, &shared);
     Ok(())
+}
+
+fn retry_shown(
+    shared: &Shared,
+    installed: &[InstalledSlicer],
+    shown: &[String],
+    launch: impl FnMut(&InstalledSlicer, &Path) -> Result<(), String>,
+) {
+    let taken = failure::take_shown(&mut shared.failures.lock().unwrap(), shown);
+    let routed = files_of(&taken);
+    let remaining = failure::retry(taken, installed, launch);
+    shared.record(&routed, Vec::new(), remaining);
+}
+
+fn open_shown_in(
+    shared: &Shared,
+    target: &InstalledSlicer,
+    shown: &[String],
+    launch: impl FnMut(&InstalledSlicer, &Path) -> Result<(), String>,
+) {
+    let taken = failure::take_shown(&mut shared.failures.lock().unwrap(), shown);
+    let routed = files_of(&taken);
+    let remaining = failure::open_in(taken, target, launch);
+    shared.record(&routed, Vec::new(), remaining);
 }
 
 fn files_of(failures: &[Failure]) -> Vec<PathBuf> {
@@ -514,8 +537,8 @@ fn files_of(failures: &[Failure]) -> Vec<PathBuf> {
         .collect()
 }
 
-fn finish_recovery(app: &AppHandle, shared: &Shared, routed: &[PathBuf], remaining: Vec<Failure>) {
-    shared.record(routed, Vec::new(), remaining);
+/// Tell the window the lists changed, and exit if that was the last of the work.
+fn settle(app: &AppHandle, shared: &Shared) {
     let _ = app.emit(STATE_CHANGED_EVENT, ());
     exit_if_idle(app, shared);
 }
@@ -751,6 +774,73 @@ mod tests {
                 "config_path": "/config.json",
             })
         );
+    }
+
+    /// A failure of a file that exists, so retrying it is not ruled out.
+    fn failed_file(name: &str) -> Failure {
+        let dir = std::env::temp_dir().join(format!("slicer-router-shown-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(name);
+        std::fs::write(&file, b"").unwrap();
+        let prusa = InstalledSlicer::new(Slicer::PrusaSlicer, std::env::temp_dir());
+        Failure::launch(&file, &prusa, "didn't start".into())
+    }
+
+    fn shown(failures: &[&Failure]) -> Vec<String> {
+        failures
+            .iter()
+            .map(|f| f.file.display().to_string())
+            .collect()
+    }
+
+    fn names(shared: &Shared) -> Vec<String> {
+        let kept = shared.failures.lock().unwrap();
+        kept.iter()
+            .map(|f| f.file.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn try_again_acts_only_on_the_failures_the_window_showed() {
+        let (a, b, c) = (
+            failed_file("a.3mf"),
+            failed_file("b.3mf"),
+            failed_file("c.3mf"),
+        );
+        let shared = Shared::default();
+        shared.record(&[], Vec::new(), vec![a.clone(), b.clone(), c.clone()]);
+        let prusa = InstalledSlicer::new(Slicer::PrusaSlicer, std::env::temp_dir());
+
+        let mut launched = Vec::new();
+        retry_shown(&shared, &[prusa], &shown(&[&a, &b]), |_, file| {
+            launched.push(file.to_owned());
+            Ok(())
+        });
+
+        assert_eq!(launched, [a.file, b.file]);
+        assert_eq!(
+            names(&shared),
+            ["c.3mf"],
+            "the failure not shown is still there"
+        );
+    }
+
+    #[test]
+    fn open_elsewhere_acts_only_on_the_failures_the_window_showed() {
+        let (a, b) = (failed_file("d.3mf"), failed_file("e.3mf"));
+        let shared = Shared::default();
+        shared.record(&[], Vec::new(), vec![a.clone(), b.clone()]);
+        let orca = InstalledSlicer::new(Slicer::OrcaSlicer, std::env::temp_dir());
+
+        let mut launched = Vec::new();
+        open_shown_in(&shared, &orca, &shown(&[&b]), |slicer, file| {
+            assert_eq!(slicer.slicer, Slicer::OrcaSlicer);
+            launched.push(file.to_owned());
+            Ok(())
+        });
+
+        assert_eq!(launched, [b.file]);
+        assert_eq!(names(&shared), ["d.3mf"]);
     }
 
     #[test]
