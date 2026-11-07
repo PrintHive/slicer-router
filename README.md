@@ -138,6 +138,12 @@ and no window to take back.
 Launching Slicer Router directly, or reopening it, shows a 480 by 600 window.
 It never shows more than one sheet at a time.
 
+<p>
+  <img src="docs/images/settings.png" width="240" alt="Settings window: four slicer tiles with Bambu Studio selected, and a status line saying Slicer Router opens .3mf files">
+  <img src="docs/images/settings-question.png" width="240" alt="A sheet asking which slicer should open two files that have no slicer info">
+  <img src="docs/images/settings-waiting.png" width="240" alt="After Later: a line saying two files still need a slicer, with a Choose button">
+</p>
+
 - **Default slicer.** One tile per installed slicer, each with the icon read from
   its own app (macOS reads `CFBundleIconFile` and converts it with `sips`; other
   platforms and apps without a readable icon show a lettered tile). The selected
