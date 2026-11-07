@@ -338,8 +338,8 @@ fn handle_files(app: &AppHandle, files: Vec<PathBuf>) {
 
     if needs_window {
         show_settings(app, false);
-    } else if app.get_webview_window(SETTINGS_WINDOW).is_none() {
-        app.exit(0);
+    } else {
+        exit_if_idle(app, &shared);
     }
 }
 
@@ -477,8 +477,9 @@ fn set_override(detected: Slicer, slicer: Option<Slicer>) -> Result<(), String> 
 /// Forget the failures for the files the window showed. A failure that arrived
 /// since stays, so the window still shows it.
 #[tauri::command]
-fn dismiss_failures(shared: State<'_, Shared>, files: Vec<String>) {
+fn dismiss_failures(app: AppHandle, shared: State<'_, Shared>, files: Vec<String>) {
     failure::take_shown(&mut shared.failures.lock().unwrap(), &files);
+    exit_if_idle(&app, &shared);
 }
 
 /// Launch the shown failures that can work again in the slicer that failed
@@ -543,12 +544,16 @@ fn settle(app: &AppHandle, shared: &Shared) {
     exit_if_idle(app, shared);
 }
 
-/// Exit once nothing is waiting or failing, unless the person asked for the window.
-fn exit_if_idle(app: &AppHandle, shared: &Shared) {
-    if shared.pending.lock().unwrap().is_empty()
+/// Nothing is waiting or failing and the person did not ask for the window, so
+/// whatever window is still open is left over from the files it was opened for.
+fn is_idle(shared: &Shared) -> bool {
+    shared.pending.lock().unwrap().is_empty()
         && shared.failures.lock().unwrap().is_empty()
         && !shared.window_requested.load(Ordering::SeqCst)
-    {
+}
+
+fn exit_if_idle(app: &AppHandle, shared: &Shared) {
+    if is_idle(shared) {
         app.exit(0);
     }
 }
@@ -685,6 +690,35 @@ mod tests {
             *shared.failures.lock().unwrap(),
             [failure("x.3mf", "second")]
         );
+    }
+
+    #[test]
+    fn the_app_is_idle_only_with_nothing_waiting_or_failing_and_no_window_asked_for() {
+        let shared = Shared::default();
+        assert!(
+            is_idle(&shared),
+            "a leftover window closes with the last file"
+        );
+
+        shared.record(&paths(&["a.3mf"]), vec![waiting("a.3mf")], Vec::new());
+        assert!(!is_idle(&shared), "a question is waiting");
+        shared.record(&paths(&["a.3mf"]), Vec::new(), Vec::new());
+        assert!(is_idle(&shared));
+
+        shared.record(
+            &paths(&["b.3mf"]),
+            Vec::new(),
+            vec![failure("b.3mf", "broke")],
+        );
+        assert!(!is_idle(&shared), "a failure is showing");
+        shared.failures.lock().unwrap().clear();
+        assert!(
+            is_idle(&shared),
+            "dismissing the last failure ends the visit"
+        );
+
+        shared.window_requested.store(true, Ordering::SeqCst);
+        assert!(!is_idle(&shared), "the person opened the window themselves");
     }
 
     #[test]
