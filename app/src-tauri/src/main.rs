@@ -17,7 +17,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
 use pending::PendingFile;
 use plan::{launch_all, plan, startup, Plan, Startup};
@@ -30,10 +29,6 @@ const SETTINGS_WINDOW: &str = "settings";
 /// Sent to the window whenever the pending files or the notice change, so an
 /// open window refreshes instead of showing what it loaded at startup.
 const STATE_CHANGED_EVENT: &str = "state-changed";
-
-/// How long a macOS launch waits for the system to deliver a file-open event
-/// before concluding that the person started the app directly.
-const OPEN_EVENT_GRACE: Duration = Duration::from_millis(700);
 
 #[derive(Default)]
 struct Shared {
@@ -158,33 +153,50 @@ fn run_app(failure: Option<String>) {
         });
 }
 
-fn on_ready(app: &AppHandle) {
-    if app.state::<Shared>().notice.lock().unwrap().is_some() {
-        show_settings(app, false);
-        return;
-    }
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let files = files_from_args(std::env::args_os(), &cwd);
-    if !files.is_empty() {
-        handle_files(app, files);
-        return;
-    }
-    let grace = if cfg!(target_os = "macos") {
-        OPEN_EVENT_GRACE
+/// What the app does when it is ready to run, before anyone has interacted with it.
+#[derive(Debug, PartialEq)]
+enum Ready {
+    /// Files already launched and only their error needs showing.
+    ShowFailure,
+    /// Files came on the command line (Windows).
+    RouteArgs(Vec<PathBuf>),
+    /// Started directly: show the settings window.
+    ShowSettings,
+    /// Files already arrived and were handled. Do nothing more.
+    Idle,
+}
+
+/// macOS delivers the open-documents event (`RunEvent::Opened`) before
+/// `applicationDidFinishLaunching`, which is when `RunEvent::Ready` fires, so by
+/// `Ready` the app knows whether it was opened with files. That replaces a timer
+/// that waited for the event and could show a window that then had to be taken
+/// back. Observed on macOS 26: `Opened` arrives about 140 ms before `Ready`.
+fn ready_action(has_failure: bool, args: Vec<PathBuf>, got_files: bool) -> Ready {
+    if has_failure {
+        Ready::ShowFailure
+    } else if !args.is_empty() {
+        Ready::RouteArgs(args)
+    } else if got_files {
+        Ready::Idle
     } else {
-        Duration::ZERO
-    };
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(grace);
-        let main_handle = handle.clone();
-        let _ = handle.run_on_main_thread(move || {
-            let shared = main_handle.state::<Shared>();
-            if !shared.got_files.load(Ordering::SeqCst) {
-                show_settings(&main_handle, true);
-            }
-        });
-    });
+        Ready::ShowSettings
+    }
+}
+
+fn on_ready(app: &AppHandle) {
+    let shared = app.state::<Shared>();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let action = ready_action(
+        shared.notice.lock().unwrap().is_some(),
+        files_from_args(std::env::args_os(), &cwd),
+        shared.got_files.load(Ordering::SeqCst),
+    );
+    match action {
+        Ready::ShowFailure => show_settings(app, false),
+        Ready::RouteArgs(files) => handle_files(app, files),
+        Ready::ShowSettings => show_settings(app, true),
+        Ready::Idle => {}
+    }
 }
 
 /// Existing files named on the command line, which may hold non-Unicode names.
@@ -351,6 +363,18 @@ mod tests {
         .map(OsString::from);
         assert_eq!(files_from_args(argv, &dir), vec![file.clone()]);
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn a_launch_that_already_received_files_never_shows_a_window_on_its_own() {
+        let file = vec![PathBuf::from("a.3mf")];
+        assert_eq!(ready_action(false, vec![], true), Ready::Idle);
+        assert_eq!(ready_action(false, vec![], false), Ready::ShowSettings);
+        assert_eq!(
+            ready_action(false, file.clone(), false),
+            Ready::RouteArgs(file.clone())
+        );
+        assert_eq!(ready_action(true, file, true), Ready::ShowFailure);
     }
 
     #[test]

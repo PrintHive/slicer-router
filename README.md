@@ -116,9 +116,13 @@ failure inside the slicer.
 The app routes files before it starts any UI. Windows starts one process per
 selected file, so each process detects its own file, launches the slicer and
 exits. The app window and its single-instance handoff start only when a person is
-needed: no file was given, a question has to be asked, or a launch failed. macOS
-delivers every opened file to one running app as an open-documents event, which
-needs the app to be running first.
+needed: no file was given, a question has to be asked, or a launch failed.
+
+macOS delivers opened files to the running app as an open-documents event, so the
+app has to start first. That event arrives before the launch finishes (about
+140 ms earlier on macOS 26), so when the app is ready it already knows whether
+files came. It shows the settings window only for a direct launch, with no timer
+and no window to take back.
 
 ## Install
 
