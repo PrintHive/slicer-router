@@ -39,26 +39,41 @@ impl Failure {
         }
     }
 
-    /// `slicer` failed to open `file` for `reason`. An app that is no longer at
-    /// its path cannot be retried, so that is the reason whatever the error said.
+    /// `slicer` failed to open `file` for `reason`. A file that is no longer
+    /// there, or an app that is no longer at its path, cannot be retried, so that
+    /// is the reason whatever the error said.
     pub fn launch(file: &Path, slicer: &InstalledSlicer, reason: String) -> Self {
-        if slicer.path.exists() {
+        if !file.exists() {
+            Self::file_gone(file, Some(slicer.slicer))
+        } else if !slicer.path.exists() {
+            Self::slicer_gone(file, slicer.slicer)
+        } else {
             Failure {
                 file: file.to_owned(),
                 slicer: Some(slicer.slicer),
                 reason,
                 retryable: true,
             }
-        } else {
-            Self::gone(file, slicer.slicer)
         }
     }
 
-    fn gone(file: &Path, slicer: Slicer) -> Self {
+    fn slicer_gone(file: &Path, slicer: Slicer) -> Self {
+        Self::gone(file, Some(slicer), format!("{slicer} was moved or deleted"))
+    }
+
+    fn file_gone(file: &Path, slicer: Option<Slicer>) -> Self {
+        let name = file.file_name().map_or_else(
+            || file.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Self::gone(file, slicer, format!("{name} was moved or deleted"))
+    }
+
+    fn gone(file: &Path, slicer: Option<Slicer>, reason: String) -> Self {
         Failure {
             file: file.to_owned(),
-            slicer: Some(slicer),
-            reason: format!("{slicer} was moved or deleted"),
+            slicer,
+            reason,
             retryable: false,
         }
     }
@@ -79,9 +94,10 @@ pub fn launch_reason(err: &LaunchError) -> String {
 }
 
 /// "Try again": launch the failures that can work again in the slicer that
-/// failed them. Returns what is still failing, which is the failures that
-/// cannot be retried, the ones that failed again, and the ones whose slicer is
-/// no longer installed.
+/// failed them. Each is checked again first, since the file or the slicer may
+/// have gone since it failed. Returns what is still failing, which is the
+/// failures that cannot be retried, the ones that failed again, and the ones
+/// whose file or slicer is no longer there.
 pub fn retry(
     failures: Vec<Failure>,
     installed: &[InstalledSlicer],
@@ -94,9 +110,13 @@ pub fn retry(
             remaining.push(failure);
             continue;
         };
+        if !failure.file.exists() {
+            remaining.push(Failure::file_gone(&failure.file, Some(slicer)));
+            continue;
+        }
         match installed.iter().find(|i| i.slicer == slicer) {
             Some(target) => launches.push((failure.file, target.clone())),
-            None => remaining.push(Failure::gone(&failure.file, slicer)),
+            None => remaining.push(Failure::slicer_gone(&failure.file, slicer)),
         }
     }
     remaining.extend(launch_all(&launches, launch));
@@ -132,8 +152,30 @@ mod tests {
         InstalledSlicer::new(slicer, "/slicer-router-test/deleted.app".into())
     }
 
-    fn failed(file: &str, slicer: &InstalledSlicer) -> Failure {
-        Failure::launch(Path::new(file), slicer, "didn't start".into())
+    /// An empty file named `name` in a folder of its own, so no test sees another's.
+    fn real_file(test: &str, name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "slicer-router-failure-{}-{test}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(name);
+        std::fs::write(&file, b"").unwrap();
+        file
+    }
+
+    fn failed(file: &Path, slicer: &InstalledSlicer) -> Failure {
+        Failure::launch(file, slicer, "didn't start".into())
+    }
+
+    fn summary(failures: &[Failure]) -> Vec<(String, bool)> {
+        failures
+            .iter()
+            .map(|f| {
+                let name = f.file.file_name().unwrap().to_string_lossy().into_owned();
+                (name, f.retryable)
+            })
+            .collect()
     }
 
     #[test]
@@ -153,7 +195,8 @@ mod tests {
 
     #[test]
     fn a_slicer_that_failed_to_start_can_be_tried_again() {
-        let failure = failed("a.3mf", &present(PrusaSlicer));
+        let file = real_file("start", "a.3mf");
+        let failure = failed(&file, &present(PrusaSlicer));
         assert_eq!(failure.slicer, Some(PrusaSlicer));
         assert_eq!(failure.reason, "didn't start");
         assert!(failure.retryable);
@@ -161,9 +204,21 @@ mod tests {
 
     #[test]
     fn a_slicer_that_was_moved_or_deleted_cannot_be_tried_again() {
-        let failure = failed("a.3mf", &gone(BambuStudio));
+        let file = real_file("slicer-gone", "a.3mf");
+        let failure = failed(&file, &gone(BambuStudio));
         assert_eq!(failure.slicer, Some(BambuStudio));
         assert_eq!(failure.reason, "Bambu Studio was moved or deleted");
+        assert!(!failure.retryable);
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_cannot_be_tried_again_and_the_reason_names_it() {
+        let failure = failed(
+            Path::new("/slicer-router-test/benchy.3mf"),
+            &present(OrcaSlicer),
+        );
+        assert_eq!(failure.slicer, Some(OrcaSlicer));
+        assert_eq!(failure.reason, "benchy.3mf was moved or deleted");
         assert!(!failure.retryable);
     }
 
@@ -201,47 +256,48 @@ mod tests {
     #[test]
     fn retry_relaunches_only_what_can_work_again_and_keeps_the_rest() {
         let prusa = present(PrusaSlicer);
+        let (a, b, c, d) = (
+            real_file("retry", "a.3mf"),
+            real_file("retry", "b.3mf"),
+            real_file("retry", "c.3mf"),
+            real_file("retry", "d.3mf"),
+        );
         let failures = vec![
-            failed("a.3mf", &prusa),
-            failed("b.3mf", &gone(BambuStudio)),
-            Failure::no_slicer_installed(Path::new("c.3mf")),
-            failed("d.3mf", &prusa),
+            failed(&a, &prusa),
+            failed(&b, &gone(BambuStudio)),
+            Failure::no_slicer_installed(&c),
+            failed(&d, &prusa),
         ];
         let mut launched = Vec::new();
         let remaining = retry(failures, std::slice::from_ref(&prusa), |slicer, file| {
             launched.push((slicer.slicer, file.to_owned()));
-            if file == Path::new("d.3mf") {
+            if file == d {
                 Err("still broken".into())
             } else {
                 Ok(())
             }
         });
 
+        assert_eq!(launched, [(PrusaSlicer, a), (PrusaSlicer, d)]);
         assert_eq!(
-            launched,
+            summary(&remaining),
             [
-                (PrusaSlicer, PathBuf::from("a.3mf")),
-                (PrusaSlicer, PathBuf::from("d.3mf")),
+                ("b.3mf".to_owned(), false),
+                ("c.3mf".to_owned(), false),
+                ("d.3mf".to_owned(), true)
             ]
-        );
-        let remaining: Vec<_> = remaining
-            .iter()
-            .map(|f| (f.file.to_str().unwrap(), f.retryable))
-            .collect();
-        assert_eq!(
-            remaining,
-            [("b.3mf", false), ("c.3mf", false), ("d.3mf", true)]
         );
     }
 
     #[test]
     fn retry_gives_up_on_a_slicer_that_disappeared_since_the_failure() {
-        let failures = vec![failed("a.3mf", &present(PrusaSlicer))];
+        let file = real_file("retry-slicer", "a.3mf");
+        let failures = vec![failed(&file, &present(PrusaSlicer))];
         let remaining = retry(failures, &[], |_, _| panic!("nothing to launch with"));
         assert_eq!(
             remaining,
             [Failure {
-                file: "a.3mf".into(),
+                file,
                 slicer: Some(PrusaSlicer),
                 reason: "PrusaSlicer was moved or deleted".into(),
                 retryable: false,
@@ -250,15 +306,41 @@ mod tests {
     }
 
     #[test]
+    fn retry_checks_the_file_again_so_one_deleted_since_is_not_launched() {
+        let prusa = present(PrusaSlicer);
+        let file = real_file("retry-file", "a.3mf");
+        let failures = vec![failed(&file, &prusa)];
+        assert!(failures[0].retryable);
+        std::fs::remove_file(&file).unwrap();
+
+        let remaining = retry(failures, std::slice::from_ref(&prusa), |_, _| {
+            panic!("the file is gone")
+        });
+        assert_eq!(
+            remaining,
+            [Failure {
+                file,
+                slicer: Some(PrusaSlicer),
+                reason: "a.3mf was moved or deleted".into(),
+                retryable: false,
+            }]
+        );
+    }
+
+    #[test]
     fn opening_elsewhere_launches_every_failed_file_and_reports_new_failures() {
+        let (a, b) = (
+            real_file("elsewhere", "a.3mf"),
+            real_file("elsewhere", "b.3mf"),
+        );
         let failures = vec![
-            failed("a.3mf", &gone(BambuStudio)),
-            Failure::no_slicer_installed(Path::new("b.3mf")),
+            failed(&a, &gone(BambuStudio)),
+            Failure::no_slicer_installed(&b),
         ];
         let orca = present(OrcaSlicer);
         let remaining = open_in(failures, &orca, |slicer, file| {
             assert_eq!(slicer.slicer, OrcaSlicer);
-            if file == Path::new("b.3mf") {
+            if file == b {
                 Err("didn't start".into())
             } else {
                 Ok(())
@@ -267,7 +349,7 @@ mod tests {
         assert_eq!(
             remaining,
             [Failure {
-                file: "b.3mf".into(),
+                file: b,
                 slicer: Some(OrcaSlicer),
                 reason: "didn't start".into(),
                 retryable: true,
