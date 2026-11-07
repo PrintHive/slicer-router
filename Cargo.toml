@@ -1,7 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/slicer-router-core", "crates/slicer-router-cli", "app/src-tauri"]
-default-members = ["crates/slicer-router-core", "crates/slicer-router-cli"]
+members = [
+    "crates/slicer-router-core",
+    "crates/slicer-router-cli",
+    "crates/slicer-router-ffi",
+    "app/src-tauri",
+]
+default-members = [
+    "crates/slicer-router-core",
+    "crates/slicer-router-cli",
+    "crates/slicer-router-ffi",
+]
 
 [workspace.package]
 version = "0.1.0"

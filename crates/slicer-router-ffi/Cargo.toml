@@ -1,0 +1,27 @@
+[package]
+name = "slicer-router-ffi"
+description = "C ABI over slicer-router-core for the macOS Finder thumbnail extension."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+slicer-router-core.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+# Not the workspace lints: this crate is the C boundary, the one place where
+# unsafe code is allowed.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

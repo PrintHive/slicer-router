@@ -3239,6 +3239,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "slicer-router-ffi"
+version = "0.1.0"
+dependencies = [
+ "slicer-router-core",
+ "tempfile",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
