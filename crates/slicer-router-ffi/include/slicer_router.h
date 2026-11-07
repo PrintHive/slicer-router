@@ -15,11 +15,9 @@ typedef struct SrThumbnail {
     size_t image_len;
 } SrThumbnail;
 
-/* The app group whose container holds the routing snapshot. Static storage. */
-const char *sr_app_group(void);
-
-/* Route `file` with the snapshot in `snapshot_dir`, which may be NULL. */
-SrThumbnail sr_thumbnail(const char *file, const char *snapshot_dir);
+/* Route `file` with the snapshot the app saved under `home`, the user's real
+   home folder, which may be NULL. */
+SrThumbnail sr_thumbnail(const char *file, const char *home);
 
 void sr_thumbnail_free(SrThumbnail thumbnail);
 

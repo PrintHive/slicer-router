@@ -137,16 +137,17 @@ fn a_missing_damaged_or_other_version_snapshot_is_none() {
 }
 
 #[test]
-fn the_snapshot_lives_in_the_app_group_container_on_macos() {
-    let dir = Snapshot::default_dir();
-    if cfg!(target_os = "macos") {
-        let dir = dir.expect("HOME is set");
-        assert!(
-            dir.ends_with("Library/Group Containers/L5C8455NJH.com.printhive.slicer-router"),
-            "{}",
-            dir.display()
-        );
-    } else {
-        assert_eq!(dir, None);
+fn the_app_saves_the_snapshot_where_the_extension_reads_it() {
+    let home = PathBuf::from("/Users/someone");
+    let read_by_extension = Snapshot::dir_for_home(&home);
+    assert_eq!(
+        read_by_extension,
+        home.join("Library/Application Support/Slicer Router")
+    );
+    if cfg!(target_os = "macos") && std::env::var_os("SLICER_ROUTER_CONFIG").is_none() {
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert_eq!(Snapshot::default_dir(), Some(Snapshot::dir_for_home(&home)));
+    } else if !cfg!(target_os = "macos") {
+        assert_eq!(Snapshot::default_dir(), None);
     }
 }

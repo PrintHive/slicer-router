@@ -1,9 +1,9 @@
 //! The routing state that the macOS Finder thumbnail extension reads.
 //!
 //! The extension runs in a sandbox, so it can neither scan for installed slicers
-//! nor read the config file. The app writes both into a snapshot in an app group
-//! container that the extension can read, and the extension routes each file with
-//! the same [`route`] the app uses.
+//! nor read the config file. The app writes both into a snapshot beside the
+//! config file, in the one folder the extension is entitled to read, and the
+//! extension routes each file with the same [`route`] the app uses.
 
 use std::fs;
 use std::io;
@@ -11,15 +11,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+use crate::config::{mac_folder, Config};
 use crate::detect::Verdict;
 use crate::discover::InstalledSlicer;
 use crate::route::{route, Route};
 use crate::slicer::Slicer;
-
-/// App group shared by Slicer Router.app and its thumbnail extension. The team ID
-/// prefix lets a Developer ID build use the group without a provisioning profile.
-pub const APP_GROUP: &str = "L5C8455NJH.com.printhive.slicer-router";
 
 /// Changes when the file's shape does. A reader ignores any other version.
 const VERSION: u32 = 1;
@@ -84,13 +80,21 @@ impl Snapshot {
         Ok(true)
     }
 
-    /// Where the app saves the snapshot: the [`APP_GROUP`] container on macOS.
-    /// `None` elsewhere, because only macOS has the thumbnail extension.
+    /// Where the app saves the snapshot on macOS: the folder that holds the
+    /// config file, so it follows [`CONFIG_PATH_ENV`](crate::CONFIG_PATH_ENV) and a
+    /// test config never replaces the real snapshot. `None` on other platforms,
+    /// which have no thumbnail extension.
     pub fn default_dir() -> Option<PathBuf> {
         if !cfg!(target_os = "macos") {
             return None;
         }
-        let home = PathBuf::from(std::env::var_os("HOME")?);
-        Some(home.join("Library/Group Containers").join(APP_GROUP))
+        Some(Config::default_path()?.parent()?.to_owned())
+    }
+
+    /// Where the extension reads the snapshot of the user whose home is `home`:
+    /// `~/Library/Application Support/Slicer Router`. Its entitlements grant read
+    /// access to that folder alone.
+    pub fn dir_for_home(home: &Path) -> PathBuf {
+        mac_folder(home)
     }
 }

@@ -17,4 +17,4 @@ pub use evidence::{read_evidence, read_thumbnail, DetectError, Evidence, Printer
 pub use launch::{launch, LaunchError};
 pub use route::{route, Route, RouteReason};
 pub use slicer::{PrinterPatterns, Slicer, SlicerSpec, UnknownSlicer, WindowsHints};
-pub use snapshot::{Snapshot, APP_GROUP};
+pub use snapshot::Snapshot;
