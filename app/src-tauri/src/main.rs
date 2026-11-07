@@ -484,14 +484,23 @@ fn dismiss_failures(app: AppHandle, shared: State<'_, Shared>, files: Vec<String
 
 /// Launch the shown failures that can work again in the slicer that failed
 /// them. What still fails comes back as failures.
-#[tauri::command]
-fn retry_failures(app: AppHandle, shared: State<'_, Shared>, files: Vec<String>) {
+///
+/// The commands that launch slicers are `async` so they run off the main thread:
+/// on macOS each launch waits for `open`, and the window must not freeze while
+/// it does. None of them holds a lock while it launches.
+#[tauri::command(async)]
+fn retry_failures(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    files: Vec<String>,
+) -> Result<(), String> {
     retry_shown(&shared, &discover_installed(), &files, launch_file);
     settle(&app, &shared);
+    Ok(())
 }
 
 /// Open every shown failure in `slicer`, this once. The config is not changed.
-#[tauri::command]
+#[tauri::command(async)]
 fn open_failures_in(
     app: AppHandle,
     shared: State<'_, Shared>,
@@ -565,7 +574,7 @@ fn exit_if_idle(app: &AppHandle, shared: &Shared) {
 /// The answer is saved by [`pending::resolve`]: an override for a detected slicer,
 /// the default slicer otherwise. Files that do not open become failures for the
 /// window to show, not an error from this command.
-#[tauri::command]
+#[tauri::command(async)]
 fn choose(
     app: AppHandle,
     shared: State<'_, Shared>,
@@ -573,25 +582,43 @@ fn choose(
     slicer: Slicer,
 ) -> Result<(), String> {
     let installed = discover_installed();
+    let path = Config::default_path().ok_or("cannot determine the config folder")?;
+    let released = answer(&shared, &path, &installed, detected, slicer, launch_file)?;
+    refresh_thumbnails(installed, &load_config_or_default());
+    let _ = app.emit(STATE_CHANGED_EVENT, ());
+    if released > 0 {
+        exit_if_idle(&app, &shared);
+    }
+    Ok(())
+}
+
+/// Save the answer, launch the files that waited on it in `slicer`, and record
+/// the ones that did not open. Returns how many files were released.
+fn answer(
+    shared: &Shared,
+    config_path: &Path,
+    installed: &[InstalledSlicer],
+    detected: Option<Slicer>,
+    slicer: Slicer,
+    launch: impl FnMut(&InstalledSlicer, &Path) -> Result<(), String>,
+) -> Result<usize, String> {
     let target = installed
         .iter()
         .find(|i| i.slicer == slicer)
         .ok_or_else(|| format!("{slicer} is not installed"))?;
-    let path = Config::default_path().ok_or("cannot determine the config folder")?;
-
-    let released = pending::resolve(&path, &mut shared.pending.lock().unwrap(), detected, slicer)?;
+    let released = pending::resolve(
+        config_path,
+        &mut shared.pending.lock().unwrap(),
+        detected,
+        slicer,
+    )?;
     let launches: Vec<_> = released
         .iter()
         .map(|file| (file.clone(), target.clone()))
         .collect();
-    let failures = launch_all(&launches, launch_file);
-    refresh_thumbnails(installed.clone(), &load_config_or_default());
+    let failures = launch_all(&launches, launch);
     shared.record(&released, Vec::new(), failures);
-    let _ = app.emit(STATE_CHANGED_EVENT, ());
-    if !released.is_empty() {
-        exit_if_idle(&app, &shared);
-    }
-    Ok(())
+    Ok(released.len())
 }
 
 #[cfg(test)]
@@ -827,6 +854,12 @@ mod tests {
             .collect()
     }
 
+    /// Launching can take seconds, so no list may be locked while it does.
+    fn assert_unlocked(shared: &Shared) {
+        assert!(shared.pending.try_lock().is_ok(), "pending is locked");
+        assert!(shared.failures.try_lock().is_ok(), "failures is locked");
+    }
+
     fn names(shared: &Shared) -> Vec<String> {
         let kept = shared.failures.lock().unwrap();
         kept.iter()
@@ -847,6 +880,7 @@ mod tests {
 
         let mut launched = Vec::new();
         retry_shown(&shared, &[prusa], &shown(&[&a, &b]), |_, file| {
+            assert_unlocked(&shared);
             launched.push(file.to_owned());
             Ok(())
         });
@@ -860,6 +894,69 @@ mod tests {
     }
 
     #[test]
+    fn answering_a_question_launches_its_files_with_no_list_locked_and_records_failures() {
+        let waiting_file = failed_file("f.3mf").file;
+        let other_file = failed_file("g.3mf").file;
+        let shared = Shared::default();
+        shared.record(
+            &[],
+            vec![
+                PendingFile {
+                    path: waiting_file.clone(),
+                    detected: None,
+                },
+                PendingFile {
+                    path: other_file.clone(),
+                    detected: Some(Slicer::PrusaSlicer),
+                },
+            ],
+            Vec::new(),
+        );
+        let config = std::env::temp_dir().join(format!(
+            "slicer-router-answer-{}/config.json",
+            std::process::id()
+        ));
+        let bambu = InstalledSlicer::new(Slicer::BambuStudio, std::env::temp_dir());
+
+        let released = answer(
+            &shared,
+            &config,
+            &[bambu],
+            None,
+            Slicer::BambuStudio,
+            |_, _| {
+                assert_unlocked(&shared);
+                Err("didn't start".into())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(released, 1);
+        assert_eq!(
+            shared.pending.lock().unwrap()[0].path,
+            other_file,
+            "the other group keeps waiting"
+        );
+        assert_eq!(names(&shared), ["f.3mf"]);
+        assert_eq!(
+            Config::load(&config).unwrap().default_slicer,
+            Some(Slicer::BambuStudio)
+        );
+    }
+
+    #[test]
+    fn answering_with_a_slicer_that_is_not_installed_changes_nothing() {
+        let shared = Shared::default();
+        shared.record(&[], vec![waiting("h.3mf")], Vec::new());
+        let config = std::env::temp_dir().join("slicer-router-answer-missing/config.json");
+        let result = answer(&shared, &config, &[], None, Slicer::OrcaSlicer, |_, _| {
+            panic!("nothing to launch with")
+        });
+        assert_eq!(result, Err("OrcaSlicer is not installed".to_owned()));
+        assert_eq!(shared.pending.lock().unwrap().len(), 1);
+    }
+
+    #[test]
     fn open_elsewhere_acts_only_on_the_failures_the_window_showed() {
         let (a, b) = (failed_file("d.3mf"), failed_file("e.3mf"));
         let shared = Shared::default();
@@ -869,6 +966,7 @@ mod tests {
         let mut launched = Vec::new();
         open_shown_in(&shared, &orca, &shown(&[&b]), |slicer, file| {
             assert_eq!(slicer.slicer, Slicer::OrcaSlicer);
+            assert_unlocked(&shared);
             launched.push(file.to_owned());
             Ok(())
         });
