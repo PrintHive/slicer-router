@@ -8,6 +8,7 @@ mod evidence;
 mod launch;
 mod route;
 mod slicer;
+mod snapshot;
 
 pub use config::{Config, ConfigError, CONFIG_PATH_ENV};
 pub use detect::{classify, detect, Rule, Verdict};
@@ -16,3 +17,4 @@ pub use evidence::{read_evidence, read_thumbnail, DetectError, Evidence, Printer
 pub use launch::{launch, LaunchError};
 pub use route::{route, Route, RouteReason};
 pub use slicer::{PrinterPatterns, Slicer, SlicerSpec, UnknownSlicer, WindowsHints};
+pub use snapshot::{Snapshot, APP_GROUP};
