@@ -46,8 +46,10 @@ function pendingBanner(group, installed) {
 function render(state) {
   $("pending").replaceChildren(...state.pending.map((group) => pendingBanner(group, state.installed)));
 
-  show("notice", Boolean(state.notice));
-  $("notice-text").textContent = state.notice ?? "";
+  show("notice", state.failures.length > 0);
+  $("notice-text").textContent = state.failures
+    .map((failure) => `${failure.file.split(/[\\/]/).pop()} · ${failure.reason}`)
+    .join("\n");
 
   show("none", state.installed.length === 0);
   $("slicers").replaceChildren(
@@ -94,7 +96,7 @@ async function choose(detected, id) {
 }
 
 $("dismiss").addEventListener("click", async () => {
-  await invoke("dismiss_notice");
+  await invoke("dismiss_failures");
   await refresh();
 });
 

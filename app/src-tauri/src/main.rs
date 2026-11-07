@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod failure;
 mod pending;
 mod plan;
 
@@ -19,6 +20,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use failure::{launch_reason, Failure};
 use pending::PendingFile;
 use plan::{launch_all, plan, startup, Plan, Startup};
 use serde::Serialize;
@@ -27,7 +29,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWin
 
 const SETTINGS_WINDOW: &str = "settings";
 
-/// Sent to the window whenever the pending files or the notice change, so an
+/// Sent to the window whenever the pending files or the failures change, so an
 /// open window refreshes instead of showing what it loaded at startup.
 const STATE_CHANGED_EVENT: &str = "state-changed";
 
@@ -35,8 +37,8 @@ const STATE_CHANGED_EVENT: &str = "state-changed";
 struct Shared {
     /// Files waiting for the person to choose a slicer.
     pending: Mutex<Vec<PendingFile>>,
-    /// Latest problem to show in the settings window, until the person dismisses it.
-    notice: Mutex<Option<String>>,
+    /// Files that did not open, shown until the person dismisses them.
+    failures: Mutex<Vec<Failure>>,
     /// A file arrived since launch.
     got_files: AtomicBool,
     /// The person asked for the window (direct launch or reopen), so it stays
@@ -45,13 +47,13 @@ struct Shared {
 }
 
 impl Shared {
-    /// Keep the outcome of routing some files: queue the questions and show the
-    /// newest problems.
-    fn record(&self, ask: Vec<PendingFile>, notices: &[String]) {
+    /// Keep the outcome of routing some files: queue the questions and the
+    /// failures.
+    fn record(&self, ask: Vec<PendingFile>, failures: Vec<Failure>) {
         self.pending.lock().unwrap().extend(ask);
-        if !notices.is_empty() {
-            *self.notice.lock().unwrap() = Some(notices.join("\n"));
-        }
+        let mut kept = self.failures.lock().unwrap();
+        kept.retain(|old| !failures.iter().any(|new| new.file == old.file));
+        kept.extend(failures);
     }
 }
 
@@ -73,13 +75,35 @@ struct PendingGroupView {
 }
 
 #[derive(Serialize)]
+struct FailureView {
+    file: String,
+    slicer: Option<Slicer>,
+    slicer_name: Option<&'static str>,
+    reason: String,
+    retryable: bool,
+}
+
+#[derive(Serialize)]
 struct StateView {
     platform: &'static str,
     installed: Vec<SlicerView>,
     default_slicer: Option<Slicer>,
     pending: Vec<PendingGroupView>,
-    notice: Option<String>,
+    failures: Vec<FailureView>,
     config_path: Option<PathBuf>,
+}
+
+fn failures_view(failures: &[Failure]) -> Vec<FailureView> {
+    failures
+        .iter()
+        .map(|failure| FailureView {
+            file: failure.file.display().to_string(),
+            slicer: failure.slicer,
+            slicer_name: failure.slicer.map(Slicer::display_name),
+            reason: failure.reason.clone(),
+            retryable: failure.retryable,
+        })
+        .collect()
 }
 
 fn pending_view(pending: &[PendingFile]) -> Vec<PendingGroupView> {
@@ -102,13 +126,13 @@ fn main() {
     refresh_thumbnails(installed, &config);
     match started {
         Startup::Done => {}
-        Startup::Failed(notice) => run_app(Some(notice)),
+        Startup::Failed(failures) => run_app(Some(failures)),
         Startup::Window => run_app(None),
     }
 }
 
 fn launch_file(slicer: &InstalledSlicer, file: &Path) -> Result<(), String> {
-    launch(slicer, file).map_err(|err| err.to_string())
+    launch(slicer, file).map_err(|err| launch_reason(&err))
 }
 
 /// Save what the Finder thumbnail extension needs to badge each `.3mf` with the
@@ -140,13 +164,13 @@ fn refresh_thumbnails(installed: Vec<InstalledSlicer>, config: &Config) {
     }
 }
 
-/// Run the Tauri app. `failure` is set when the files already launched and only
-/// the error needs showing: that process skips the single-instance handoff,
+/// Run the Tauri app. `failures` is set when the files already launched and only
+/// the errors need showing: that process skips the single-instance handoff,
 /// which would send its command line to the running instance and open those
 /// files a second time.
-fn run_app(failure: Option<String>) {
+fn run_app(failures: Option<Vec<Failure>>) {
     let mut builder = tauri::Builder::default();
-    if failure.is_none() {
+    if failures.is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             let files = files_from_args(argv.into_iter().map(OsString::from), Path::new(&cwd));
             if files.is_empty() {
@@ -157,12 +181,16 @@ fn run_app(failure: Option<String>) {
         }));
     }
     let shared = Shared {
-        notice: Mutex::new(failure),
+        failures: Mutex::new(failures.unwrap_or_default()),
         ..Shared::default()
     };
     builder
         .manage(shared)
-        .invoke_handler(tauri::generate_handler![get_state, choose, dismiss_notice])
+        .invoke_handler(tauri::generate_handler![
+            get_state,
+            choose,
+            dismiss_failures
+        ])
         .build(tauri::generate_context!())
         .expect("failed to build the Slicer Router app")
         .run(|app, event| match event {
@@ -215,7 +243,7 @@ fn on_ready(app: &AppHandle) {
     let shared = app.state::<Shared>();
     let cwd = std::env::current_dir().unwrap_or_default();
     let action = ready_action(
-        shared.notice.lock().unwrap().is_some(),
+        !shared.failures.lock().unwrap().is_empty(),
         files_from_args(std::env::args_os(), &cwd),
         shared.got_files.load(Ordering::SeqCst),
     );
@@ -265,14 +293,13 @@ fn handle_files(app: &AppHandle, files: Vec<PathBuf>) {
     let Plan {
         launches,
         ask,
-        notices,
+        mut failures,
     } = plan(&files, &installed, &load_config_or_default());
 
-    let mut notices = notices;
-    notices.extend(launch_all(&launches, launch_file));
+    failures.extend(launch_all(&launches, launch_file));
 
-    let needs_window = !ask.is_empty() || !notices.is_empty();
-    shared.record(ask, &notices);
+    let needs_window = !ask.is_empty() || !failures.is_empty();
+    shared.record(ask, failures);
     let _ = app.emit(STATE_CHANGED_EVENT, ());
 
     if needs_window {
@@ -325,14 +352,14 @@ fn get_state(shared: State<'_, Shared>) -> StateView {
         installed,
         default_slicer,
         pending: pending_view(&shared.pending.lock().unwrap()),
-        notice: shared.notice.lock().unwrap().clone(),
+        failures: failures_view(&shared.failures.lock().unwrap()),
         config_path,
     }
 }
 
 #[tauri::command]
-fn dismiss_notice(shared: State<'_, Shared>) {
-    *shared.notice.lock().unwrap() = None;
+fn dismiss_failures(shared: State<'_, Shared>) {
+    shared.failures.lock().unwrap().clear();
 }
 
 /// Answer a question and open the files that were waiting on it.
@@ -340,7 +367,8 @@ fn dismiss_notice(shared: State<'_, Shared>) {
 /// `detected` is the group's slicer from [`PendingGroupView`], or `None` for
 /// files with no signal and for picking the default slicer with nothing waiting.
 /// The answer is saved by [`pending::resolve`]: an override for a detected slicer,
-/// the default slicer otherwise.
+/// the default slicer otherwise. Files that do not open become failures for the
+/// window to show, not an error from this command.
 #[tauri::command]
 fn choose(
     app: AppHandle,
@@ -360,15 +388,20 @@ fn choose(
         let released = pending::resolve(&path, &mut pending, detected, slicer)?;
         (released, pending.is_empty())
     };
-    let failures: Vec<String> = released
+    let launches: Vec<_> = released
         .iter()
-        .filter_map(|file| launch_file(target, file).err())
+        .map(|file| (file.clone(), target.clone()))
         .collect();
+    let failures = launch_all(&launches, launch_file);
     refresh_thumbnails(installed.clone(), &load_config_or_default());
-    if !failures.is_empty() {
-        return Err(failures.join("\n"));
-    }
-    if !released.is_empty() && nothing_left && !shared.window_requested.load(Ordering::SeqCst) {
+    let all_opened = failures.is_empty();
+    shared.record(Vec::new(), failures);
+    let _ = app.emit(STATE_CHANGED_EVENT, ());
+    if all_opened
+        && !released.is_empty()
+        && nothing_left
+        && !shared.window_requested.load(Ordering::SeqCst)
+    {
         app.exit(0);
     }
     Ok(())
@@ -406,26 +439,76 @@ mod tests {
         assert_eq!(ready_action(true, file, true), Ready::ShowFailure);
     }
 
+    fn failure(file: &str, reason: &str) -> Failure {
+        Failure {
+            file: file.into(),
+            slicer: Some(Slicer::PrusaSlicer),
+            reason: reason.into(),
+            retryable: true,
+        }
+    }
+
     #[test]
-    fn routing_more_files_adds_questions_and_replaces_the_notice() {
+    fn routing_more_files_adds_questions_and_keeps_failures_until_dismissed() {
         let shared = Shared::default();
         let file = |name: &str| PendingFile {
             path: name.into(),
             detected: None,
         };
-        shared.record(vec![file("a.3mf")], &[]);
-        shared.record(vec![file("b.3mf")], &["first problem".to_owned()]);
-        shared.record(Vec::new(), &["second".to_owned(), "problem".to_owned()]);
-        shared.record(Vec::new(), &[]);
+        shared.record(vec![file("a.3mf")], Vec::new());
+        shared.record(vec![file("b.3mf")], vec![failure("x.3mf", "first")]);
+        shared.record(Vec::new(), vec![failure("y.3mf", "second")]);
+        shared.record(Vec::new(), Vec::new());
 
         assert_eq!(
             *shared.pending.lock().unwrap(),
             [file("a.3mf"), file("b.3mf")]
         );
         assert_eq!(
-            shared.notice.lock().unwrap().as_deref(),
-            Some("second\nproblem"),
-            "routing with no problems keeps the last notice until it is dismissed"
+            *shared.failures.lock().unwrap(),
+            [failure("x.3mf", "first"), failure("y.3mf", "second")],
+            "routing with no problems keeps earlier failures until they are dismissed"
+        );
+    }
+
+    #[test]
+    fn a_file_that_fails_again_replaces_its_earlier_failure() {
+        let shared = Shared::default();
+        shared.record(Vec::new(), vec![failure("x.3mf", "first")]);
+        shared.record(Vec::new(), vec![failure("x.3mf", "second")]);
+        assert_eq!(
+            *shared.failures.lock().unwrap(),
+            [failure("x.3mf", "second")]
+        );
+    }
+
+    #[test]
+    fn the_window_gets_failures_with_the_slicer_named_and_whether_to_retry() {
+        let failures = [
+            failure(
+                "/Downloads/a.3mf",
+                "PrusaSlicer didn't start (exit status 1)",
+            ),
+            Failure::no_slicer_installed(Path::new("/Downloads/b.3mf")),
+        ];
+        assert_eq!(
+            serde_json::to_value(failures_view(&failures)).unwrap(),
+            serde_json::json!([
+                {
+                    "file": "/Downloads/a.3mf",
+                    "slicer": "prusa-slicer",
+                    "slicer_name": "PrusaSlicer",
+                    "reason": "PrusaSlicer didn't start (exit status 1)",
+                    "retryable": true,
+                },
+                {
+                    "file": "/Downloads/b.3mf",
+                    "slicer": null,
+                    "slicer_name": null,
+                    "reason": "No supported slicer is installed",
+                    "retryable": false,
+                },
+            ])
         );
     }
 
