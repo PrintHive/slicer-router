@@ -5,8 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  TAURI_CLI_VERSION: 2.9.6
 
 jobs:
   core:
@@ -26,6 +30,15 @@ jobs:
       - run: cargo clippy --workspace --exclude slicer-router-app --all-targets -- -D warnings
       - run: cargo test --workspace --exclude slicer-router-app
 
+  msrv:
+    name: core and cli on the declared minimum Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p slicer-router-core -p slicer-router-cli --all-targets --locked
+
   app:
     name: tauri app (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -35,8 +48,10 @@ jobs:
         include:
           - os: macos-latest
             bundle: app
+            artifact: slicer-router-macos.zip
           - os: windows-latest
             bundle: nsis
+            artifact: target/release/bundle/nsis/*.exe
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -45,13 +60,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p slicer-router-app --all-targets -- -D warnings
       - run: cargo test -p slicer-router-app
-      - run: cargo install tauri-cli --version "^2" --locked
+      - name: Restore tauri-cli
+        id: tauri-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri${{ runner.os == 'Windows' && '.exe' || '' }}
+          key: tauri-cli-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install tauri-cli
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "${{ env.TAURI_CLI_VERSION }}" --locked
       - run: cargo tauri build --bundles ${{ matrix.bundle }}
         working-directory: app/src-tauri
+      - name: Archive the macOS app
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent "target/release/bundle/macos/Slicer Router.app" slicer-router-macos.zip
       - uses: actions/upload-artifact@v4
         with:
           name: slicer-router-${{ matrix.os }}
-          path: |
-            target/release/bundle/macos/*.app
-            target/release/bundle/nsis/*.exe
+          path: ${{ matrix.artifact }}
           if-no-files-found: error
