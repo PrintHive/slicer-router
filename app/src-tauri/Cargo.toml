@@ -5,7 +5,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+publish.workspace = true
+# Tauri 2 and its plugins declare 1.90; core and the CLI only need 1.88.
+rust-version = "1.90"
 default-run = "slicer-router-app"
 
 [build-dependencies]

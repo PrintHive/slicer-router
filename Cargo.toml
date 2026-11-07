@@ -8,6 +8,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PrintHive/slicer-router"
+# Consumed as a git dependency, never published to crates.io.
+publish = false
+# What the core and CLI crates need (their dependency `zip` requires 1.88). The
+# app sets its own, higher value because Tauri 2 requires 1.90.
 rust-version = "1.88"
 
 [workspace.dependencies]
