@@ -1,6 +1,6 @@
 //! Turn opened files into launches, questions and notices.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use slicer_router_core::{detect, route, Config, InstalledSlicer, Route, Slicer, Verdict};
 
@@ -42,6 +42,57 @@ pub fn plan(files: &[PathBuf], installed: &[InstalledSlicer], config: &Config) -
         }
     }
     plan
+}
+
+/// What a process started with files does before it creates any window.
+#[derive(Debug, PartialEq)]
+pub enum Startup {
+    /// Every file was handed to its slicer. Exit without starting the app.
+    Done,
+    /// Files were handed over but some launches failed. Start the app only to show this.
+    /// The app must not route the files again, or the ones that opened would open twice.
+    Failed(String),
+    /// A window is needed (no files, or a file needs a question or an error),
+    /// and nothing was launched. The app routes the files itself.
+    Window,
+}
+
+/// Route `files` and launch them directly when no window is needed.
+///
+/// On Windows each file in a multi-selection starts its own process, and the
+/// single-instance plugin hands extra processes' files to the first one over a
+/// message the sender does not wait for. A process that routes its own files
+/// here never depends on that handoff for the common case.
+pub fn startup(
+    files: &[PathBuf],
+    installed: &[InstalledSlicer],
+    config: &Config,
+    launch: impl FnMut(&InstalledSlicer, &Path) -> Result<(), String>,
+) -> Startup {
+    if files.is_empty() {
+        return Startup::Window;
+    }
+    let plan = plan(files, installed, config);
+    if !plan.ask.is_empty() || !plan.notices.is_empty() {
+        return Startup::Window;
+    }
+    let failures = launch_all(&plan.launches, launch);
+    if failures.is_empty() {
+        Startup::Done
+    } else {
+        Startup::Failed(failures.join("\n"))
+    }
+}
+
+/// Launch every planned file. Returns one message per failure.
+pub fn launch_all(
+    launches: &[(PathBuf, InstalledSlicer)],
+    mut launch: impl FnMut(&InstalledSlicer, &Path) -> Result<(), String>,
+) -> Vec<String> {
+    launches
+        .iter()
+        .filter_map(|(file, slicer)| launch(slicer, file).err())
+        .collect()
 }
 
 #[cfg(test)]
@@ -119,6 +170,85 @@ mod tests {
             &Config::default(),
         );
         assert_eq!(plan.notices.len(), 1);
+    }
+
+    fn junk_file(name: &str) -> PathBuf {
+        let file = tempfile_dir().join(name);
+        std::fs::write(&file, b"junk").unwrap();
+        file
+    }
+
+    fn all_four() -> Vec<InstalledSlicer> {
+        installed(&[BambuStudio, OrcaSlicer, SnapmakerOrca, PrusaSlicer])
+    }
+
+    #[test]
+    fn every_file_of_a_multi_selection_launches_before_any_window_exists() {
+        let files = [
+            fixture("real-snapmaker-orca-u1.3mf"),
+            fixture("real-bambu-studio-p1s.3mf"),
+            fixture("real-prusaslicer-cli.3mf"),
+        ];
+        let mut launched = Vec::new();
+        let result = startup(&files, &all_four(), &Config::default(), |slicer, file| {
+            launched.push((file.to_owned(), slicer.slicer));
+            Ok(())
+        });
+        assert_eq!(result, Startup::Done);
+        assert_eq!(
+            launched,
+            [
+                (files[0].clone(), SnapmakerOrca),
+                (files[1].clone(), BambuStudio),
+                (files[2].clone(), PrusaSlicer),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_files_means_the_settings_window() {
+        let result = startup(&[], &all_four(), &Config::default(), |_, _| {
+            panic!("nothing to launch")
+        });
+        assert_eq!(result, Startup::Window);
+    }
+
+    #[test]
+    fn a_question_defers_every_file_so_none_opens_twice() {
+        let ask = junk_file("startup-ask.3mf");
+        let files = [fixture("real-bambu-studio-p1s.3mf"), ask];
+        let installed = installed(&[BambuStudio, PrusaSlicer]);
+        let result = startup(&files, &installed, &Config::default(), |_, _| {
+            panic!("the window path routes the files itself")
+        });
+        assert_eq!(result, Startup::Window);
+    }
+
+    #[test]
+    fn no_installed_slicer_needs_the_window_to_say_so() {
+        let result = startup(
+            &[fixture("real-bambu-studio-p1s.3mf")],
+            &[],
+            &Config::default(),
+            |_, _| panic!("nothing to launch with"),
+        );
+        assert_eq!(result, Startup::Window);
+    }
+
+    #[test]
+    fn launch_failures_are_reported_for_the_window_to_show() {
+        let files = [
+            fixture("real-bambu-studio-p1s.3mf"),
+            fixture("real-prusaslicer-cli.3mf"),
+        ];
+        let result = startup(&files, &all_four(), &Config::default(), |slicer, _| {
+            if slicer.slicer == BambuStudio {
+                Err("cannot start Bambu Studio".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result, Startup::Failed("cannot start Bambu Studio".into()));
     }
 
     fn tempfile_dir() -> PathBuf {

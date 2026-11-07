@@ -111,6 +111,15 @@ Windows it returns as soon as the slicer process exists and does not see a later
 failure inside the slicer.
 - **Linux.** Not supported yet. The library compiles but finds nothing.
 
+### How the app opens files
+
+The app routes files before it starts any UI. Windows starts one process per
+selected file, so each process detects its own file, launches the slicer and
+exits. The app window and its single-instance handoff start only when a person is
+needed: no file was given, a question has to be asked, or a launch failed. macOS
+delivers every opened file to one running app as an open-documents event, which
+needs the app to be running first.
+
 ## Install
 
 There are no prebuilt releases yet. Build from source with a current stable Rust

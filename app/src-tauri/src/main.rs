@@ -2,17 +2,23 @@
 //!
 //! Opened with files, it routes each one, launches the slicer and exits without
 //! showing a window. Opened on its own, it shows the settings window.
+//!
+//! A file named on the command line is routed in `main` before Tauri exists, so
+//! a Windows multi-selection (one process per file) launches every file without
+//! relying on the single-instance handoff. The app starts only when a window is
+//! needed: no files, a question to ask, or an error to show.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod plan;
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use plan::{plan, Plan};
+use plan::{launch_all, plan, startup, Plan, Startup};
 use serde::Serialize;
 use slicer_router_core::{discover_installed, launch, Config, InstalledSlicer, Slicer};
 use tauri::{AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
@@ -54,19 +60,48 @@ struct StateView {
 }
 
 fn main() {
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-            let files = files_from_args(&argv, Path::new(&cwd));
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let files = files_from_args(std::env::args_os(), &cwd);
+    let started = startup(
+        &files,
+        &discover_installed(),
+        &load_config_or_default(),
+        launch_file,
+    );
+    match started {
+        Startup::Done => {}
+        Startup::Failed(notice) => run_app(Some(notice)),
+        Startup::Window => run_app(None),
+    }
+}
+
+fn launch_file(slicer: &InstalledSlicer, file: &Path) -> Result<(), String> {
+    launch(slicer, file).map_err(|err| err.to_string())
+}
+
+/// Run the Tauri app. `failure` is set when the files already launched and only
+/// the error needs showing: that process skips the single-instance handoff,
+/// which would send its command line to the running instance and open those
+/// files a second time.
+fn run_app(failure: Option<String>) {
+    let mut builder = tauri::Builder::default();
+    if failure.is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let files = files_from_args(argv.into_iter().map(OsString::from), Path::new(&cwd));
             if files.is_empty() {
                 show_settings(app, true);
             } else {
                 handle_files(app, files);
             }
-        }))
-        .manage(Shared::default())
-        .invoke_handler(tauri::generate_handler![get_state, set_default]);
-
+        }));
+    }
+    let shared = Shared {
+        notice: Mutex::new(failure),
+        ..Shared::default()
+    };
     builder
+        .manage(shared)
+        .invoke_handler(tauri::generate_handler![get_state, set_default])
         .build(tauri::generate_context!())
         .expect("failed to build the Slicer Router app")
         .run(|app, event| match event {
@@ -86,9 +121,12 @@ fn main() {
 }
 
 fn on_ready(app: &AppHandle) {
+    if app.state::<Shared>().notice.lock().unwrap().is_some() {
+        show_settings(app, false);
+        return;
+    }
     let cwd = std::env::current_dir().unwrap_or_default();
-    let argv: Vec<String> = std::env::args().collect();
-    let files = files_from_args(&argv, &cwd);
+    let files = files_from_args(std::env::args_os(), &cwd);
     if !files.is_empty() {
         handle_files(app, files);
         return;
@@ -111,11 +149,12 @@ fn on_ready(app: &AppHandle) {
     });
 }
 
-/// Existing files named on the command line. Relative paths resolve against `cwd`.
-fn files_from_args(argv: &[String], cwd: &Path) -> Vec<PathBuf> {
-    argv.iter()
+/// Existing files named on the command line, which may hold non-Unicode names.
+/// Relative paths resolve against `cwd`.
+fn files_from_args(argv: impl IntoIterator<Item = OsString>, cwd: &Path) -> Vec<PathBuf> {
+    argv.into_iter()
         .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
+        .filter(|arg| arg.as_encoded_bytes().first() != Some(&b'-'))
         .map(|arg| cwd.join(arg))
         .filter(|path| path.is_file())
         .collect()
@@ -152,11 +191,7 @@ fn handle_files(app: &AppHandle, files: Vec<PathBuf>) {
     } = plan(&files, &installed, &load_config_or_default());
 
     let mut notices = notices;
-    for (file, slicer) in launches {
-        if let Err(err) = launch(&slicer, &file) {
-            notices.push(err.to_string());
-        }
-    }
+    notices.extend(launch_all(&launches, launch_file));
 
     let needs_window = !ask.is_empty() || !notices.is_empty();
     shared.pending.lock().unwrap().extend(ask);
@@ -267,13 +302,25 @@ mod tests {
         let dir = std::env::temp_dir();
         let file = dir.join("slicer-router-args-test.3mf");
         std::fs::write(&file, b"").unwrap();
-        let argv = vec![
-            "slicer-router".to_owned(),
-            "--flag".to_owned(),
-            "slicer-router-args-test.3mf".to_owned(),
-            "missing.3mf".to_owned(),
-        ];
-        assert_eq!(files_from_args(&argv, &dir), vec![file.clone()]);
+        let argv = [
+            "slicer-router",
+            "--flag",
+            "slicer-router-args-test.3mf",
+            "missing.3mf",
+        ]
+        .map(OsString::from);
+        assert_eq!(files_from_args(argv, &dir), vec![file.clone()]);
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_unicode_argument_is_skipped_not_a_panic() {
+        use std::os::unix::ffi::OsStringExt;
+        let argv = vec![
+            OsString::from("slicer-router"),
+            OsString::from_vec(vec![b'f', 0xff, b'.', b'3', b'm', b'f']),
+        ];
+        assert!(files_from_args(argv, &std::env::temp_dir()).is_empty());
     }
 }
