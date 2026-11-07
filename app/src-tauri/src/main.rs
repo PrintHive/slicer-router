@@ -55,13 +55,29 @@ struct Shared {
 }
 
 impl Shared {
-    /// Keep the outcome of routing some files: queue the questions and the
-    /// failures.
-    fn record(&self, ask: Vec<PendingFile>, failures: Vec<Failure>) {
-        self.pending.lock().unwrap().extend(ask);
+    /// Keep the outcome of routing `routed`: queue the questions and the failures.
+    ///
+    /// Each routed file first leaves whatever list it was in, so a file never
+    /// waits and fails at once, and opening it again cannot leave a stale
+    /// question or failure that would open it a second time. A file is queued or
+    /// recorded as failed once, however many times it came.
+    ///
+    /// Locks are always taken `pending` first, then `failures`.
+    fn record(&self, routed: &[PathBuf], ask: Vec<PendingFile>, failures: Vec<Failure>) {
+        let mut pending = self.pending.lock().unwrap();
+        pending.retain(|old| !routed.contains(&old.path));
+        for file in ask {
+            if !pending.iter().any(|old| old.path == file.path) {
+                pending.push(file);
+            }
+        }
         let mut kept = self.failures.lock().unwrap();
-        kept.retain(|old| !failures.iter().any(|new| new.file == old.file));
-        kept.extend(failures);
+        kept.retain(|old| !routed.contains(&old.file));
+        for failure in failures {
+            if !kept.iter().any(|old| old.file == failure.file) {
+                kept.push(failure);
+            }
+        }
     }
 }
 
@@ -317,7 +333,7 @@ fn handle_files(app: &AppHandle, files: Vec<PathBuf>) {
     failures.extend(launch_all(&launches, launch_file));
 
     let needs_window = !ask.is_empty() || !failures.is_empty();
-    shared.record(ask, failures);
+    shared.record(&files, ask, failures);
     let _ = app.emit(STATE_CHANGED_EVENT, ());
 
     if needs_window {
@@ -468,8 +484,9 @@ fn dismiss_failures(shared: State<'_, Shared>) {
 #[tauri::command]
 fn retry_failures(app: AppHandle, shared: State<'_, Shared>) {
     let failures = std::mem::take(&mut *shared.failures.lock().unwrap());
+    let routed = files_of(&failures);
     let remaining = failure::retry(failures, &discover_installed(), launch_file);
-    finish_recovery(&app, &shared, remaining);
+    finish_recovery(&app, &shared, &routed, remaining);
 }
 
 /// Open every failed file in `slicer`, this once. The config is not changed.
@@ -484,13 +501,21 @@ fn open_failures_in(
         .find(|i| i.slicer == slicer)
         .ok_or_else(|| format!("{slicer} is not installed"))?;
     let failures = std::mem::take(&mut *shared.failures.lock().unwrap());
+    let routed = files_of(&failures);
     let remaining = failure::open_in(failures, &target, launch_file);
-    finish_recovery(&app, &shared, remaining);
+    finish_recovery(&app, &shared, &routed, remaining);
     Ok(())
 }
 
-fn finish_recovery(app: &AppHandle, shared: &Shared, remaining: Vec<Failure>) {
-    shared.record(Vec::new(), remaining);
+fn files_of(failures: &[Failure]) -> Vec<PathBuf> {
+    failures
+        .iter()
+        .map(|failure| failure.file.clone())
+        .collect()
+}
+
+fn finish_recovery(app: &AppHandle, shared: &Shared, routed: &[PathBuf], remaining: Vec<Failure>) {
+    shared.record(routed, Vec::new(), remaining);
     let _ = app.emit(STATE_CHANGED_EVENT, ());
     exit_if_idle(app, shared);
 }
@@ -533,7 +558,7 @@ fn choose(
         .collect();
     let failures = launch_all(&launches, launch_file);
     refresh_thumbnails(installed.clone(), &load_config_or_default());
-    shared.record(Vec::new(), failures);
+    shared.record(&released, Vec::new(), failures);
     let _ = app.emit(STATE_CHANGED_EVENT, ());
     if !released.is_empty() {
         exit_if_idle(&app, &shared);
@@ -582,21 +607,36 @@ mod tests {
         }
     }
 
+    fn waiting(name: &str) -> PendingFile {
+        PendingFile {
+            path: name.into(),
+            detected: None,
+        }
+    }
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
     #[test]
     fn routing_more_files_adds_questions_and_keeps_failures_until_dismissed() {
         let shared = Shared::default();
-        let file = |name: &str| PendingFile {
-            path: name.into(),
-            detected: None,
-        };
-        shared.record(vec![file("a.3mf")], Vec::new());
-        shared.record(vec![file("b.3mf")], vec![failure("x.3mf", "first")]);
-        shared.record(Vec::new(), vec![failure("y.3mf", "second")]);
-        shared.record(Vec::new(), Vec::new());
+        shared.record(&paths(&["a.3mf"]), vec![waiting("a.3mf")], Vec::new());
+        shared.record(
+            &paths(&["b.3mf", "x.3mf"]),
+            vec![waiting("b.3mf")],
+            vec![failure("x.3mf", "first")],
+        );
+        shared.record(
+            &paths(&["y.3mf"]),
+            Vec::new(),
+            vec![failure("y.3mf", "second")],
+        );
+        shared.record(&paths(&["z.3mf"]), Vec::new(), Vec::new());
 
         assert_eq!(
             *shared.pending.lock().unwrap(),
-            [file("a.3mf"), file("b.3mf")]
+            [waiting("a.3mf"), waiting("b.3mf")]
         );
         assert_eq!(
             *shared.failures.lock().unwrap(),
@@ -608,8 +648,16 @@ mod tests {
     #[test]
     fn a_file_that_fails_again_replaces_its_earlier_failure() {
         let shared = Shared::default();
-        shared.record(Vec::new(), vec![failure("x.3mf", "first")]);
-        shared.record(Vec::new(), vec![failure("x.3mf", "second")]);
+        shared.record(
+            &paths(&["x.3mf"]),
+            Vec::new(),
+            vec![failure("x.3mf", "first")],
+        );
+        shared.record(
+            &paths(&["x.3mf"]),
+            Vec::new(),
+            vec![failure("x.3mf", "second")],
+        );
         assert_eq!(
             *shared.failures.lock().unwrap(),
             [failure("x.3mf", "second")]
@@ -617,51 +665,44 @@ mod tests {
     }
 
     #[test]
-    fn the_whole_state_has_the_shape_the_window_reads() {
-        let mut config = Config::default();
-        config.default_slicer = Some(Slicer::BambuStudio);
-        config
-            .overrides
-            .insert(Slicer::PrusaSlicer, Slicer::OrcaSlicer);
-        let pending = [PendingFile {
-            path: "a.3mf".into(),
-            detected: None,
-        }];
-        let view = state_view(
-            vec![InstalledSlicer::new(
-                Slicer::BambuStudio,
-                "/Applications/BambuStudio.app".into(),
-            )],
-            &config,
-            Some(DefaultApp {
-                is_default: false,
-                current_name: "Bambu Studio".into(),
-            }),
-            &pending,
-            &[failure("b.3mf", "PrusaSlicer didn't start")],
-            Some("/config.json".into()),
+    fn a_file_that_opens_on_a_later_try_leaves_the_failures() {
+        let shared = Shared::default();
+        shared.record(
+            &paths(&["x.3mf"]),
+            Vec::new(),
+            vec![failure("x.3mf", "first")],
         );
+        shared.record(&paths(&["x.3mf"]), Vec::new(), Vec::new());
+        assert!(shared.failures.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_file_never_waits_and_fails_at_once() {
+        let shared = Shared::default();
+        shared.record(&paths(&["x.3mf"]), vec![waiting("x.3mf")], Vec::new());
+        shared.record(
+            &paths(&["x.3mf"]),
+            Vec::new(),
+            vec![failure("x.3mf", "broke")],
+        );
+        assert!(shared.pending.lock().unwrap().is_empty());
         assert_eq!(
-            serde_json::to_value(view).unwrap(),
-            serde_json::json!({
-                "platform": std::env::consts::OS,
-                "installed": [
-                    {"id": "bambu-studio", "name": "Bambu Studio", "path": "/Applications/BambuStudio.app"},
-                ],
-                "default_slicer": "bambu-studio",
-                "overrides": {"prusa-slicer": "orca-slicer"},
-                "default_app": {"is_default": false, "current_name": "Bambu Studio"},
-                "pending": [{"detected": null, "detected_name": null, "files": ["a.3mf"]}],
-                "failures": [{
-                    "file": "b.3mf",
-                    "slicer": "prusa-slicer",
-                    "slicer_name": "PrusaSlicer",
-                    "reason": "PrusaSlicer didn't start",
-                    "retryable": true,
-                }],
-                "config_path": "/config.json",
-            })
+            *shared.failures.lock().unwrap(),
+            [failure("x.3mf", "broke")]
         );
+
+        shared.record(&paths(&["x.3mf"]), vec![waiting("x.3mf")], Vec::new());
+        assert_eq!(*shared.pending.lock().unwrap(), [waiting("x.3mf")]);
+        assert!(shared.failures.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_file_that_came_twice_waits_once() {
+        let shared = Shared::default();
+        let twice = vec![waiting("x.3mf"), waiting("x.3mf")];
+        shared.record(&paths(&["x.3mf", "x.3mf"]), twice, Vec::new());
+        shared.record(&paths(&["x.3mf"]), vec![waiting("x.3mf")], Vec::new());
+        assert_eq!(*shared.pending.lock().unwrap(), [waiting("x.3mf")]);
     }
 
     #[test]

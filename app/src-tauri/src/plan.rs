@@ -17,12 +17,18 @@ pub struct Plan {
     pub failures: Vec<Failure>,
 }
 
-/// Route every file. An unreadable file is routed like one with no metadata, so
-/// the chosen slicer shows its own error instead of the router refusing.
+/// Route every file, each once however many times it is listed. An unreadable
+/// file is routed like one with no metadata, so the chosen slicer shows its own
+/// error instead of the router refusing.
 pub fn plan(files: &[PathBuf], installed: &[InstalledSlicer], config: &Config) -> Plan {
     let slicers: Vec<Slicer> = installed.iter().map(|i| i.slicer).collect();
     let mut plan = Plan::default();
+    let mut seen: Vec<&PathBuf> = Vec::new();
     for file in files {
+        if seen.contains(&file) {
+            continue;
+        }
+        seen.push(file);
         let verdict = detect(file).unwrap_or_else(|err| {
             eprintln!("slicer-router: {err}");
             Verdict::no_signal()
@@ -134,6 +140,18 @@ mod tests {
             [SnapmakerOrca, BambuStudio, OrcaSlicer, PrusaSlicer]
         );
         assert!(plan.ask.is_empty() && plan.failures.is_empty());
+    }
+
+    #[test]
+    fn a_file_listed_twice_is_routed_once() {
+        let file = fixture("real-bambu-studio-p1s.3mf");
+        let plan = plan(
+            &[file.clone(), file.clone()],
+            &installed(&[BambuStudio]),
+            &Config::default(),
+        );
+        assert_eq!(plan.launches.len(), 1);
+        assert_eq!(plan.launches[0].0, file);
     }
 
     #[test]
