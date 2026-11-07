@@ -35,7 +35,7 @@ const ui = {
 };
 
 // Children may be nested lists, and `false` or `null` for "not here".
-const compact = (children) => children.flat().filter((child) => child != null && child !== false);
+const compact = (children) => children.flat(Infinity).filter((child) => child != null && child !== false);
 
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
