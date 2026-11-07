@@ -1,7 +1,7 @@
 // Stands in for the Tauri runtime so ../ui runs in a browser, on fixture states.
 // Dev only: this folder is outside frontendDist and never ships in the app.
 //
-// frame.html?state=<scenario>&icons=none&launch=fail&makeDefault=fail
+// frame.html?state=<scenario>&icons=none&launch=fail&makeDefault=fail&command=fail
 (() => {
   const params = new URLSearchParams(location.search);
   const SLICERS = {
@@ -106,6 +106,9 @@
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const emit = () => setTimeout(() => listeners.forEach((listener) => listener({ payload: null })), 0);
   const launchFails = params.get("launch") === "fail";
+  const refuse = () => {
+    if (params.get("command") === "fail") throw "cannot save the config: permission denied";
+  };
 
   const launchIn = (files, id) =>
     launchFails ? files.map((file) => failure(file, id, didNotStart(id))) : [];
@@ -118,6 +121,7 @@
       ),
     async choose({ detected, slicer }) {
       await wait(400);
+      refuse();
       const released = model.pending.filter((group) => group.detected === detected);
       model.pending = model.pending.filter((group) => group.detected !== detected);
       if (detected === null) model.default_slicer = slicer;
@@ -138,11 +142,13 @@
     reveal_example_3mf() {},
     async retry_failures({ files }) {
       await wait(400);
+      refuse();
       model.failures = model.failures.filter((f) => !(files.includes(f.file) && f.retryable));
       emit();
     },
     async open_failures_in({ files, slicer }) {
       await wait(400);
+      refuse();
       const opened = model.failures.filter((f) => files.includes(f.file));
       model.failures = model.failures.filter((f) => !files.includes(f.file));
       model.failures.push(...opened.flatMap((f) => launchIn([f.file], slicer)));

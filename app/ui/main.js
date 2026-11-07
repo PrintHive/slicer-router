@@ -489,6 +489,7 @@ function fillSheet(sheet, want) {
       ),
     ),
     ...compact(body),
+    ui.problem && h("p", { class: "sheet-problem", role: "alert" }, ui.problem),
   );
   if (key) sheet.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
 }
