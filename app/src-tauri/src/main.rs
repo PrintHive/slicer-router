@@ -23,9 +23,13 @@ use pending::PendingFile;
 use plan::{launch_all, plan, startup, Plan, Startup};
 use serde::Serialize;
 use slicer_router_core::{discover_installed, launch, Config, InstalledSlicer, Slicer};
-use tauri::{AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
 
 const SETTINGS_WINDOW: &str = "settings";
+
+/// Sent to the window whenever the pending files or the notice change, so an
+/// open window refreshes instead of showing what it loaded at startup.
+const STATE_CHANGED_EVENT: &str = "state-changed";
 
 /// How long a macOS launch waits for the system to deliver a file-open event
 /// before concluding that the person started the app directly.
@@ -35,13 +39,24 @@ const OPEN_EVENT_GRACE: Duration = Duration::from_millis(700);
 struct Shared {
     /// Files waiting for the person to choose a slicer.
     pending: Mutex<Vec<PendingFile>>,
-    /// Latest problem to show in the settings window.
+    /// Latest problem to show in the settings window, until the person dismisses it.
     notice: Mutex<Option<String>>,
     /// A file arrived since launch.
     got_files: AtomicBool,
     /// The person asked for the window (direct launch or reopen), so it stays
     /// open after pending files are handled.
     window_requested: AtomicBool,
+}
+
+impl Shared {
+    /// Keep the outcome of routing some files: queue the questions and show the
+    /// newest problems.
+    fn record(&self, ask: Vec<PendingFile>, notices: &[String]) {
+        self.pending.lock().unwrap().extend(ask);
+        if !notices.is_empty() {
+            *self.notice.lock().unwrap() = Some(notices.join("\n"));
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -124,7 +139,7 @@ fn run_app(failure: Option<String>) {
     };
     builder
         .manage(shared)
-        .invoke_handler(tauri::generate_handler![get_state, choose])
+        .invoke_handler(tauri::generate_handler![get_state, choose, dismiss_notice])
         .build(tauri::generate_context!())
         .expect("failed to build the Slicer Router app")
         .run(|app, event| match event {
@@ -217,10 +232,8 @@ fn handle_files(app: &AppHandle, files: Vec<PathBuf>) {
     notices.extend(launch_all(&launches, launch_file));
 
     let needs_window = !ask.is_empty() || !notices.is_empty();
-    shared.pending.lock().unwrap().extend(ask);
-    if !notices.is_empty() {
-        *shared.notice.lock().unwrap() = Some(notices.join("\n"));
-    }
+    shared.record(ask, &notices);
+    let _ = app.emit(STATE_CHANGED_EVENT, ());
 
     if needs_window {
         show_settings(app, false);
@@ -272,9 +285,14 @@ fn get_state(shared: State<'_, Shared>) -> StateView {
         installed,
         default_slicer,
         pending: pending_view(&shared.pending.lock().unwrap()),
-        notice: shared.notice.lock().unwrap().take(),
+        notice: shared.notice.lock().unwrap().clone(),
         config_path,
     }
+}
+
+#[tauri::command]
+fn dismiss_notice(shared: State<'_, Shared>) {
+    *shared.notice.lock().unwrap() = None;
 }
 
 /// Answer a question and open the files that were waiting on it.
@@ -333,6 +351,29 @@ mod tests {
         .map(OsString::from);
         assert_eq!(files_from_args(argv, &dir), vec![file.clone()]);
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn routing_more_files_adds_questions_and_replaces_the_notice() {
+        let shared = Shared::default();
+        let file = |name: &str| PendingFile {
+            path: name.into(),
+            detected: None,
+        };
+        shared.record(vec![file("a.3mf")], &[]);
+        shared.record(vec![file("b.3mf")], &["first problem".to_owned()]);
+        shared.record(Vec::new(), &["second".to_owned(), "problem".to_owned()]);
+        shared.record(Vec::new(), &[]);
+
+        assert_eq!(
+            *shared.pending.lock().unwrap(),
+            [file("a.3mf"), file("b.3mf")]
+        );
+        assert_eq!(
+            shared.notice.lock().unwrap().as_deref(),
+            Some("second\nproblem"),
+            "routing with no problems keeps the last notice until it is dismissed"
+        );
     }
 
     #[test]

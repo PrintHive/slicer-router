@@ -13,6 +13,7 @@
     .muted { opacity: .7; }
     .banner { border-radius: 8px; padding: 10px 12px; margin: 14px 0 0; background: rgba(255, 170, 0, .18); }
     .banner.error { background: rgba(220, 50, 50, .18); }
+    #notice-text { white-space: pre-line; word-break: break-all; }
     .banner ul { margin: 6px 0 0; padding-left: 18px; word-break: break-all; }
     .banner .choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .banner .note { margin: 8px 0 0; }
@@ -32,7 +33,10 @@
   <p class="muted">Opens each .3mf in the slicer that made it.</p>
 
   <div id="pending"></div>
-  <div id="notice" class="banner error" hidden></div>
+  <div id="notice" class="banner error" hidden>
+    <span id="notice-text"></span>
+    <p class="note"><button id="dismiss">Dismiss</button></p>
+  </div>
 
   <h2>Slicer for files with no origin</h2>
   <div id="slicers"></div>

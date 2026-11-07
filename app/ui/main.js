@@ -1,4 +1,5 @@
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,7 +47,7 @@ function render(state) {
   $("pending").replaceChildren(...state.pending.map((group) => pendingBanner(group, state.installed)));
 
   show("notice", Boolean(state.notice));
-  $("notice").textContent = state.notice ?? "";
+  $("notice-text").textContent = state.notice ?? "";
 
   show("none", state.installed.length === 0);
   $("slicers").replaceChildren(
@@ -74,16 +75,31 @@ function render(state) {
   $("hint-windows").style.display = state.platform === "windows" ? "block" : "none";
 }
 
-async function choose(detected, id) {
+async function refresh() {
   try {
-    await invoke("choose", { detected, slicer: id });
-    $("status").textContent = "Saved.";
     render(await invoke("get_state"));
   } catch (error) {
     $("status").textContent = String(error);
   }
 }
 
-invoke("get_state").then(render, (error) => {
-  $("status").textContent = String(error);
+async function choose(detected, id) {
+  try {
+    await invoke("choose", { detected, slicer: id });
+    $("status").textContent = "Saved.";
+  } catch (error) {
+    $("status").textContent = String(error);
+  }
+  await refresh();
+}
+
+$("dismiss").addEventListener("click", async () => {
+  await invoke("dismiss_notice");
+  await refresh();
 });
+
+// New files can arrive while the window is open, and the window can sit behind
+// others while the config changes, so refresh on the app's event and on focus.
+listen("state-changed", refresh);
+window.addEventListener("focus", refresh);
+refresh();
