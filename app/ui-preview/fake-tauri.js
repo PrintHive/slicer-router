@@ -176,5 +176,30 @@
       },
     },
   };
-  window.__PREVIEW__ = { scenarios: Object.keys(SCENARIOS) };
+  // What happens while the window is open: more files arrive, or a launch fails.
+  let arrived = 0;
+  const arrivals = {
+    "no-info"() {
+      const file = `/Users/you/Downloads/arrived-${++arrived}.3mf`;
+      const group = model.pending.find((g) => g.detected === null);
+      if (group) group.files.push(file);
+      else model.pending.push({ detected: null, detected_name: null, files: [file] });
+    },
+    prusa() {
+      const file = `/Users/you/Downloads/arrived-${++arrived}_MK4S.3mf`;
+      const group = model.pending.find((g) => g.detected === "prusa-slicer");
+      if (group) group.files.push(file);
+      else model.pending.push({ detected: "prusa-slicer", detected_name: "PrusaSlicer", files: [file] });
+    },
+    failure() {
+      model.failures.push(failure(`/Users/you/Downloads/arrived-${++arrived}.3mf`, "orca-slicer", didNotStart("orca-slicer")));
+    },
+  };
+  window.__PREVIEW__ = {
+    scenarios: Object.keys(SCENARIOS),
+    arrive(kind) {
+      arrivals[kind]();
+      emit();
+    },
+  };
 })();

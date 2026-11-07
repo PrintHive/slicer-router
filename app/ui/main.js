@@ -18,8 +18,9 @@ const OVERRIDE_KINDS = [
 //
 // One sheet shows at a time. `sheet` is the mounted one: null, or
 // { kind: "question" | "failure", key }, and for a failure sheet the `files` it
-// lists, which is what its buttons act on. A question outranks failures, and
-// `later` hides the question until the person asks for it again. `leaving` is
+// lists, which is what its buttons act on. A question outranks failures.
+// `deferred` holds the keys of the question groups the person pressed Later on;
+// a group not in it opens its sheet. `leaving` is
 // set from the moment a sheet starts to exit until the action that closed it has
 // finished, and nothing new mounts in between.
 const ui = {
@@ -27,7 +28,7 @@ const ui = {
   icons: null,
   sheet: null,
   leaving: false,
-  later: false,
+  deferred: new Set(),
   overridesOpen: false,
   stepsOpen: false,
   problem: null,
@@ -123,7 +124,8 @@ async function command(name, args) {
 
 function render() {
   if (!ui.data) return;
-  if (ui.data.pending.length === 0) ui.later = false;
+  const waiting = new Set(ui.data.pending.map(questionKey));
+  for (const key of ui.deferred) if (!waiting.has(key)) ui.deferred.delete(key);
   renderView();
   reconcileSheet();
 }
@@ -192,8 +194,9 @@ function emptyCard() {
 }
 
 function waitingLine(data) {
-  if (!ui.later || data.pending.length === 0) return null;
-  const count = data.pending.reduce((total, group) => total + group.files.length, 0);
+  const deferred = data.pending.filter((group) => ui.deferred.has(questionKey(group)));
+  if (deferred.length === 0) return null;
+  const count = deferred.reduce((total, group) => total + group.files.length, 0);
   return h(
     "div",
     { class: "card warn waitline" },
@@ -420,8 +423,8 @@ function questionKey(group) {
 }
 
 function wantedSheet(data) {
-  const [group] = data.pending;
-  if (group && !ui.later) return { kind: "question", key: questionKey(group) };
+  const group = data.pending.find((candidate) => !ui.deferred.has(questionKey(candidate)));
+  if (group) return { kind: "question", key: questionKey(group) };
   if (data.failures.length > 0) return { kind: "failure", key: "failure" };
   return null;
 }
@@ -645,14 +648,15 @@ function landOnTile(slicerId, pulse) {
 }
 
 async function deferQuestion() {
+  const { key } = ui.sheet;
   await leaveSheet(() => {
-    ui.later = true;
+    ui.deferred.add(key);
   });
   if (!ui.sheet) view.querySelector('[data-key="reopen"]')?.focus({ preventScroll: true });
 }
 
 function reopenQuestion() {
-  ui.later = false;
+  ui.deferred.clear();
   render();
 }
 

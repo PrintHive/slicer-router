@@ -57,6 +57,12 @@
           label.append(box, ` ${flag}`);
           return label;
         }),
+        ...[["no-info", "a file with no info arrives"], ["prusa", "a Prusa file arrives"], ["failure", "a launch fails"]].map(([kind, text]) => {
+          const button = document.createElement("button");
+          button.textContent = text;
+          button.onclick = () => frame.contentWindow.__PREVIEW__.arrive(kind);
+          return button;
+        }),
         Object.assign(document.createElement("p"), {
           textContent: "Fixture states for ../ui/main.js. Emulate prefers-reduced-motion in devtools to check the fades.",
         }),
