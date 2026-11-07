@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod pending;
 mod plan;
 
 use std::ffi::OsString;
@@ -18,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use pending::PendingFile;
 use plan::{launch_all, plan, startup, Plan, Startup};
 use serde::Serialize;
 use slicer_router_core::{discover_installed, launch, Config, InstalledSlicer, Slicer};
@@ -32,7 +34,7 @@ const OPEN_EVENT_GRACE: Duration = Duration::from_millis(700);
 #[derive(Default)]
 struct Shared {
     /// Files waiting for the person to choose a slicer.
-    pending: Mutex<Vec<PathBuf>>,
+    pending: Mutex<Vec<PendingFile>>,
     /// Latest problem to show in the settings window.
     notice: Mutex<Option<String>>,
     /// A file arrived since launch.
@@ -49,14 +51,35 @@ struct SlicerView {
     path: PathBuf,
 }
 
+/// Pending files that share a question.
+#[derive(Serialize)]
+struct PendingGroupView {
+    /// The slicer these files belong to when it is not installed, or `null` for
+    /// files with no signal.
+    detected: Option<Slicer>,
+    detected_name: Option<&'static str>,
+    files: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct StateView {
     platform: &'static str,
     installed: Vec<SlicerView>,
     default_slicer: Option<Slicer>,
-    pending: Vec<String>,
+    pending: Vec<PendingGroupView>,
     notice: Option<String>,
     config_path: Option<PathBuf>,
+}
+
+fn pending_view(pending: &[PendingFile]) -> Vec<PendingGroupView> {
+    pending::groups(pending)
+        .into_iter()
+        .map(|(detected, files)| PendingGroupView {
+            detected,
+            detected_name: detected.map(Slicer::display_name),
+            files: files.iter().map(|f| f.display().to_string()).collect(),
+        })
+        .collect()
 }
 
 fn main() {
@@ -101,7 +124,7 @@ fn run_app(failure: Option<String>) {
     };
     builder
         .manage(shared)
-        .invoke_handler(tauri::generate_handler![get_state, set_default])
+        .invoke_handler(tauri::generate_handler![get_state, choose])
         .build(tauri::generate_context!())
         .expect("failed to build the Slicer Router app")
         .run(|app, event| match event {
@@ -248,46 +271,45 @@ fn get_state(shared: State<'_, Shared>) -> StateView {
         platform: std::env::consts::OS,
         installed,
         default_slicer,
-        pending: shared
-            .pending
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
+        pending: pending_view(&shared.pending.lock().unwrap()),
         notice: shared.notice.lock().unwrap().take(),
         config_path,
     }
 }
 
-/// Remember `slicer` for files with no detectable origin, then open any files
-/// that were waiting for that choice. A damaged config file is replaced.
+/// Answer a question and open the files that were waiting on it.
+///
+/// `detected` is the group's slicer from [`PendingGroupView`], or `None` for
+/// files with no signal and for picking the default slicer with nothing waiting.
+/// The answer is saved by [`pending::resolve`]: an override for a detected slicer,
+/// the default slicer otherwise.
 #[tauri::command]
-fn set_default(app: AppHandle, shared: State<'_, Shared>, slicer: Slicer) -> Result<(), String> {
-    let path = Config::default_path().ok_or("cannot determine the config folder")?;
-    let mut config = Config::load_for_update(&path).map_err(|e| e.to_string())?;
-    config.default_slicer = Some(slicer);
-    config.save(&path).map_err(|e| e.to_string())?;
-
-    let pending = std::mem::take(&mut *shared.pending.lock().unwrap());
-    if pending.is_empty() {
-        return Ok(());
-    }
+fn choose(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    detected: Option<Slicer>,
+    slicer: Slicer,
+) -> Result<(), String> {
     let installed = discover_installed();
     let target = installed
         .iter()
         .find(|i| i.slicer == slicer)
         .ok_or_else(|| format!("{slicer} is not installed"))?;
-    let mut failures = Vec::new();
-    for file in &pending {
-        if let Err(err) = launch(target, file) {
-            failures.push(err.to_string());
-        }
-    }
+    let path = Config::default_path().ok_or("cannot determine the config folder")?;
+
+    let (released, nothing_left) = {
+        let mut pending = shared.pending.lock().unwrap();
+        let released = pending::resolve(&path, &mut pending, detected, slicer)?;
+        (released, pending.is_empty())
+    };
+    let failures: Vec<String> = released
+        .iter()
+        .filter_map(|file| launch_file(target, file).err())
+        .collect();
     if !failures.is_empty() {
         return Err(failures.join("\n"));
     }
-    if !shared.window_requested.load(Ordering::SeqCst) {
+    if !released.is_empty() && nothing_left && !shared.window_requested.load(Ordering::SeqCst) {
         app.exit(0);
     }
     Ok(())
@@ -311,6 +333,27 @@ mod tests {
         .map(OsString::from);
         assert_eq!(files_from_args(argv, &dir), vec![file.clone()]);
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn the_window_gets_one_question_per_group_with_the_missing_slicer_named() {
+        let pending = [
+            PendingFile {
+                path: "a.3mf".into(),
+                detected: None,
+            },
+            PendingFile {
+                path: "b.3mf".into(),
+                detected: Some(Slicer::SnapmakerOrca),
+            },
+        ];
+        assert_eq!(
+            serde_json::to_value(pending_view(&pending)).unwrap(),
+            serde_json::json!([
+                {"detected": null, "detected_name": null, "files": ["a.3mf"]},
+                {"detected": "snapmaker-orca", "detected_name": "Snapmaker Orca", "files": ["b.3mf"]},
+            ])
+        );
     }
 
     #[cfg(unix)]

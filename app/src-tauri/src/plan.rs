@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 
 use slicer_router_core::{detect, route, Config, InstalledSlicer, Route, Slicer, Verdict};
 
+use crate::pending::PendingFile;
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Plan {
     /// Files and the slicer that should open each.
     pub launches: Vec<(PathBuf, InstalledSlicer)>,
     /// Files that need the person to pick a slicer.
-    pub ask: Vec<PathBuf>,
+    pub ask: Vec<PendingFile>,
     /// Problems to tell the person about.
     pub notices: Vec<String>,
 }
@@ -30,7 +32,10 @@ pub fn plan(files: &[PathBuf], installed: &[InstalledSlicer], config: &Config) -
                     plan.launches.push((file.clone(), target.clone()));
                 }
             }
-            Route::Ask { .. } => plan.ask.push(file.clone()),
+            Route::Ask { detected, .. } => plan.ask.push(PendingFile {
+                path: file.clone(),
+                detected,
+            }),
             Route::NoneInstalled => plan.notices.push(format!(
                 "No supported slicer is installed, so {} was not opened.",
                 file.display()
@@ -143,7 +148,31 @@ mod tests {
             &installed(&[BambuStudio, PrusaSlicer]),
             &Config::default(),
         );
-        assert_eq!(plan.ask, [unreadable]);
+        assert_eq!(
+            plan.ask,
+            [PendingFile {
+                path: unreadable,
+                detected: None
+            }]
+        );
+        assert!(plan.launches.is_empty());
+    }
+
+    #[test]
+    fn a_file_for_a_missing_slicer_is_held_with_that_slicer_named() {
+        let snapmaker_file = fixture("real-snapmaker-orca-u1.3mf");
+        let plan = plan(
+            std::slice::from_ref(&snapmaker_file),
+            &installed(&[BambuStudio, PrusaSlicer]),
+            &Config::default(),
+        );
+        assert_eq!(
+            plan.ask,
+            [PendingFile {
+                path: snapmaker_file,
+                detected: Some(SnapmakerOrca)
+            }]
+        );
         assert!(plan.launches.is_empty());
     }
 

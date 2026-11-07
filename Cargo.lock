@@ -3207,6 +3207,7 @@ name = "slicer-router-app"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "slicer-router-core",
  "tauri",
  "tauri-build",
