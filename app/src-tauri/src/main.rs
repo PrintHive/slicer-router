@@ -11,9 +11,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod failure;
+mod overrides;
 mod pending;
 mod plan;
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -88,6 +90,8 @@ struct StateView {
     platform: &'static str,
     installed: Vec<SlicerView>,
     default_slicer: Option<Slicer>,
+    /// Detected slicer to the slicer that opens its files instead.
+    overrides: BTreeMap<Slicer, Slicer>,
     pending: Vec<PendingGroupView>,
     failures: Vec<FailureView>,
     config_path: Option<PathBuf>,
@@ -189,6 +193,7 @@ fn run_app(failures: Option<Vec<Failure>>) {
         .invoke_handler(tauri::generate_handler![
             get_state,
             choose,
+            set_override,
             retry_failures,
             open_failures_in,
             dismiss_failures
@@ -339,24 +344,54 @@ fn show_settings(app: &AppHandle, requested: bool) {
 
 #[tauri::command]
 fn get_state(shared: State<'_, Shared>) -> StateView {
-    let installed = discover_installed()
-        .into_iter()
-        .map(|InstalledSlicer { slicer, path, .. }| SlicerView {
-            id: slicer,
-            name: slicer.display_name(),
-            path,
-        })
-        .collect();
-    let config_path = Config::default_path();
-    let default_slicer = load_config_or_default().default_slicer;
+    state_view(
+        discover_installed(),
+        &load_config_or_default(),
+        &shared.pending.lock().unwrap(),
+        &shared.failures.lock().unwrap(),
+        Config::default_path(),
+    )
+}
+
+fn state_view(
+    installed: Vec<InstalledSlicer>,
+    config: &Config,
+    pending: &[PendingFile],
+    failures: &[Failure],
+    config_path: Option<PathBuf>,
+) -> StateView {
     StateView {
         platform: std::env::consts::OS,
-        installed,
-        default_slicer,
-        pending: pending_view(&shared.pending.lock().unwrap()),
-        failures: failures_view(&shared.failures.lock().unwrap()),
+        installed: installed
+            .into_iter()
+            .map(|InstalledSlicer { slicer, path, .. }| SlicerView {
+                id: slicer,
+                name: slicer.display_name(),
+                path,
+            })
+            .collect(),
+        default_slicer: config.default_slicer,
+        overrides: config.overrides.clone(),
+        pending: pending_view(pending),
+        failures: failures_view(failures),
         config_path,
     }
+}
+
+/// Send files detected as `detected` to `slicer` instead, or back to where their
+/// own metadata says when `slicer` is `None` or `detected` itself.
+#[tauri::command]
+fn set_override(detected: Slicer, slicer: Option<Slicer>) -> Result<(), String> {
+    let installed = discover_installed();
+    if let Some(slicer) = slicer {
+        if !installed.iter().any(|i| i.slicer == slicer) {
+            return Err(format!("{slicer} is not installed"));
+        }
+    }
+    let path = Config::default_path().ok_or("cannot determine the config folder")?;
+    overrides::set(&path, detected, slicer)?;
+    refresh_thumbnails(installed, &load_config_or_default());
+    Ok(())
 }
 
 #[tauri::command]
@@ -514,6 +549,49 @@ mod tests {
         assert_eq!(
             *shared.failures.lock().unwrap(),
             [failure("x.3mf", "second")]
+        );
+    }
+
+    #[test]
+    fn the_whole_state_has_the_shape_the_window_reads() {
+        let mut config = Config::default();
+        config.default_slicer = Some(Slicer::BambuStudio);
+        config
+            .overrides
+            .insert(Slicer::PrusaSlicer, Slicer::OrcaSlicer);
+        let pending = [PendingFile {
+            path: "a.3mf".into(),
+            detected: None,
+        }];
+        let view = state_view(
+            vec![InstalledSlicer::new(
+                Slicer::BambuStudio,
+                "/Applications/BambuStudio.app".into(),
+            )],
+            &config,
+            &pending,
+            &[failure("b.3mf", "PrusaSlicer didn't start")],
+            Some("/config.json".into()),
+        );
+        assert_eq!(
+            serde_json::to_value(view).unwrap(),
+            serde_json::json!({
+                "platform": std::env::consts::OS,
+                "installed": [
+                    {"id": "bambu-studio", "name": "Bambu Studio", "path": "/Applications/BambuStudio.app"},
+                ],
+                "default_slicer": "bambu-studio",
+                "overrides": {"prusa-slicer": "orca-slicer"},
+                "pending": [{"detected": null, "detected_name": null, "files": ["a.3mf"]}],
+                "failures": [{
+                    "file": "b.3mf",
+                    "slicer": "prusa-slicer",
+                    "slicer_name": "PrusaSlicer",
+                    "reason": "PrusaSlicer didn't start",
+                    "retryable": true,
+                }],
+                "config_path": "/config.json",
+            })
         );
     }
 
