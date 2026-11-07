@@ -58,9 +58,12 @@ slicers and your config:
 1. The config override for the detected slicer, if that slicer is installed.
 2. The detected slicer, if installed.
 3. The configured default, if installed.
-4. If none of those apply, a lone installed slicer is used. With several, the
-   app asks and remembers the answer as your default. With none, it reports that
-   no slicer is installed.
+4. If none of those apply, a lone installed slicer is used. With none, the
+   router reports that no slicer is installed. With several, it asks:
+   - For a file with no signal, the answer becomes your default slicer.
+   - For a file that belongs to a slicer you have not installed, the question
+     says so ("Snapmaker Orca isn't installed"), and the answer is saved as an
+     override for that slicer. Other files keep their own routing.
 
 ### Config
 

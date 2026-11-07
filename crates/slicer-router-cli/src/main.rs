@@ -151,17 +151,8 @@ fn open(file: &Path, dry_run: bool) -> Result<ExitCode, String> {
     let installed = discover_installed();
     let slicers: Vec<Slicer> = installed.iter().map(|i| i.slicer).collect();
 
-    let (slicer, reason) = match route(&verdict, &slicers, &config) {
-        Route::Launch { slicer, reason } => (slicer, reason),
-        Route::NoneInstalled => return Err("no supported slicer is installed".into()),
-        Route::Ask { choices } => {
-            let slicer = ask(&choices)?;
-            config.default_slicer = Some(slicer);
-            save_config(&config)?;
-            (slicer, RouteReason::Default)
-        }
-        _ => return Err("this version cannot act on the routing result".into()),
-    };
+    let route = route(&verdict, &slicers, &config);
+    let (slicer, reason) = choose(route, &mut config, &config_path()?, ask_on_terminal)?;
     let target: &InstalledSlicer = installed
         .iter()
         .find(|i| i.slicer == slicer)
@@ -177,6 +168,32 @@ fn open(file: &Path, dry_run: bool) -> Result<ExitCode, String> {
         launch(target, file).map_err(|e| e.to_string())?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Settle a route on one slicer. A question goes to `ask`, and the answer is
+/// remembered in `config` and saved to `config_path`.
+fn choose(
+    route: Route,
+    config: &mut Config,
+    config_path: &Path,
+    ask: impl FnOnce(Option<Slicer>, &[Slicer]) -> Result<Slicer, String>,
+) -> Result<(Slicer, RouteReason), String> {
+    match route {
+        Route::Launch { slicer, reason } => Ok((slicer, reason)),
+        Route::NoneInstalled => Err("no supported slicer is installed".into()),
+        Route::Ask { choices, detected } => {
+            let slicer = ask(detected, &choices)?;
+            config.remember_choice(detected, slicer);
+            config.save(config_path).map_err(|e| e.to_string())?;
+            let reason = if detected.is_some() {
+                RouteReason::Override
+            } else {
+                RouteReason::Default
+            };
+            Ok((slicer, reason))
+        }
+        _ => Err("this version cannot act on the routing result".into()),
+    }
 }
 
 fn describe(verdict: &Verdict, reason: RouteReason) -> String {
@@ -201,16 +218,36 @@ fn serialized_name(value: &impl serde::Serialize) -> String {
         .unwrap_or_default()
 }
 
-/// Ask on the terminal which slicer to use. Fails when there is no terminal.
-fn ask(choices: &[Slicer]) -> Result<Slicer, String> {
-    if !io::stdin().is_terminal() {
-        return Err("no default slicer is set; run `slicer-router default <slicer>` first".into());
+/// The question put to the person when no installed slicer was chosen.
+fn heading(detected: Option<Slicer>) -> String {
+    match detected {
+        Some(slicer) => format!("{slicer} isn't installed. Open this file with:"),
+        None => "This file has no slicer metadata. Open with:".into(),
     }
-    eprintln!("This file has no slicer metadata. Open with:");
+}
+
+/// What the answer will be used for, shown in the prompt.
+fn remembered_as(detected: Option<Slicer>) -> String {
+    match detected {
+        Some(slicer) => format!("for {slicer} files"),
+        None => "as the default".into(),
+    }
+}
+
+/// Ask on the terminal which slicer to use. Fails when there is no terminal.
+fn ask_on_terminal(detected: Option<Slicer>, choices: &[Slicer]) -> Result<Slicer, String> {
+    if !io::stdin().is_terminal() {
+        let why = match detected {
+            Some(slicer) => format!("{slicer} isn't installed and no default slicer is set"),
+            None => "no default slicer is set".to_owned(),
+        };
+        return Err(format!("{why}; run `slicer-router default <slicer>` first"));
+    }
+    eprintln!("{}", heading(detected));
     for (i, slicer) in choices.iter().enumerate() {
         eprintln!("  {}) {slicer}", i + 1);
     }
-    eprint!("Choice (remembered as the default): ");
+    eprint!("Choice (remembered {}): ", remembered_as(detected));
     io::stderr().flush().ok();
     let mut line = String::new();
     io::stdin()
@@ -239,4 +276,68 @@ fn load_config() -> Result<Config, String> {
 
 fn save_config(config: &Config) -> Result<(), String> {
     config.save(&config_path()?).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use Slicer::{BambuStudio, PrusaSlicer, SnapmakerOrca};
+
+    fn ask_route(detected: Option<Slicer>) -> Route {
+        Route::Ask {
+            choices: vec![BambuStudio, PrusaSlicer],
+            detected,
+        }
+    }
+
+    #[test]
+    fn a_missing_slicer_is_named_in_the_question() {
+        assert_eq!(
+            heading(Some(SnapmakerOrca)),
+            "Snapmaker Orca isn't installed. Open this file with:"
+        );
+        assert_eq!(
+            remembered_as(Some(SnapmakerOrca)),
+            "for Snapmaker Orca files"
+        );
+        assert!(heading(None).contains("no slicer metadata"));
+        assert_eq!(remembered_as(None), "as the default");
+    }
+
+    #[test]
+    fn answering_for_a_missing_slicer_saves_an_override() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut config = Config::default();
+        let (slicer, reason) = choose(
+            ask_route(Some(SnapmakerOrca)),
+            &mut config,
+            &path,
+            |detected, choices| {
+                assert_eq!(detected, Some(SnapmakerOrca));
+                assert_eq!(choices, [BambuStudio, PrusaSlicer]);
+                Ok(PrusaSlicer)
+            },
+        )
+        .unwrap();
+        assert_eq!((slicer, reason), (PrusaSlicer, RouteReason::Override));
+
+        let saved = Config::load(&path).unwrap();
+        assert_eq!(saved.default_slicer, None);
+        assert_eq!(saved.overrides.get(&SnapmakerOrca), Some(&PrusaSlicer));
+    }
+
+    #[test]
+    fn answering_for_a_file_with_no_signal_saves_the_default() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut config = Config::default();
+        let (slicer, reason) =
+            choose(ask_route(None), &mut config, &path, |_, _| Ok(BambuStudio)).unwrap();
+        assert_eq!((slicer, reason), (BambuStudio, RouteReason::Default));
+
+        let saved = Config::load(&path).unwrap();
+        assert_eq!(saved.default_slicer, Some(BambuStudio));
+        assert!(saved.overrides.is_empty());
+    }
 }

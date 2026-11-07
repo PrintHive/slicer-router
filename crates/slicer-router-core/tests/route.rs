@@ -58,7 +58,8 @@ fn undetected_file_with_no_default_asks() {
     assert_eq!(
         route,
         Route::Ask {
-            choices: vec![BambuStudio, PrusaSlicer]
+            choices: vec![BambuStudio, PrusaSlicer],
+            detected: None
         }
     );
 }
@@ -70,7 +71,8 @@ fn default_that_is_not_installed_asks() {
     assert_eq!(
         route,
         Route::Ask {
-            choices: vec![BambuStudio, PrusaSlicer]
+            choices: vec![BambuStudio, PrusaSlicer],
+            detected: None
         }
     );
 }
@@ -140,7 +142,7 @@ fn routes_serialize_with_an_action_tag_and_kebab_case_names() {
     );
     assert_eq!(
         serde_json::to_value(&ask).unwrap(),
-        serde_json::json!({"action": "ask", "choices": ["bambu-studio", "prusa-slicer"]})
+        serde_json::json!({"action": "ask", "choices": ["bambu-studio", "prusa-slicer"], "detected": null})
     );
     let none = route(&verdict(None), &[], &Config::default());
     assert_eq!(
@@ -150,5 +152,58 @@ fn routes_serialize_with_an_action_tag_and_kebab_case_names() {
     assert_eq!(
         serde_json::to_value(RouteReason::OnlyInstalled).unwrap(),
         "only-installed"
+    );
+}
+
+#[test]
+fn a_detected_slicer_that_is_not_installed_is_named_in_the_question() {
+    let route = route(
+        &verdict(Some(SnapmakerOrca)),
+        &[BambuStudio, PrusaSlicer],
+        &Config::default(),
+    );
+    assert_eq!(
+        route,
+        Route::Ask {
+            choices: vec![BambuStudio, PrusaSlicer],
+            detected: Some(SnapmakerOrca)
+        }
+    );
+}
+
+#[test]
+fn the_answer_to_a_missing_slicer_is_an_override_not_the_default() {
+    let snapmaker_file = verdict(Some(SnapmakerOrca));
+    let installed = [BambuStudio, PrusaSlicer];
+    let mut config = Config::default();
+    let Route::Ask { detected, .. } = route(&snapmaker_file, &installed, &config) else {
+        panic!("expected a question");
+    };
+    config.remember_choice(detected, PrusaSlicer);
+
+    assert_eq!(config.default_slicer, None);
+    assert_eq!(config.overrides.get(&SnapmakerOrca), Some(&PrusaSlicer));
+    assert_eq!(
+        route(&snapmaker_file, &installed, &config),
+        launch(PrusaSlicer, RouteReason::Override)
+    );
+    assert_eq!(
+        route(&verdict(Some(BambuStudio)), &installed, &config),
+        launch(BambuStudio, RouteReason::Detected),
+        "other slicers' files are unaffected"
+    );
+}
+
+#[test]
+fn the_answer_for_a_file_with_no_signal_is_the_default() {
+    let installed = [BambuStudio, PrusaSlicer];
+    let mut config = Config::default();
+    config.remember_choice(None, BambuStudio);
+
+    assert_eq!(config.default_slicer, Some(BambuStudio));
+    assert!(config.overrides.is_empty());
+    assert_eq!(
+        route(&verdict(None), &installed, &config),
+        launch(BambuStudio, RouteReason::Default)
     );
 }

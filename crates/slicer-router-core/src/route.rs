@@ -30,8 +30,14 @@ pub enum Route {
     /// Open the file in this slicer.
     Launch { slicer: Slicer, reason: RouteReason },
     /// Several slicers are installed and none was chosen. Ask the person which
-    /// one to use, then store the answer as [`Config::default_slicer`].
-    Ask { choices: Vec<Slicer> },
+    /// one to use, then store the answer with [`Config::remember_choice`].
+    ///
+    /// `detected` is the slicer the file belongs to when that slicer is not
+    /// installed, so the question can say so. It is `None` for a file with no signal.
+    Ask {
+        choices: Vec<Slicer>,
+        detected: Option<Slicer>,
+    },
     /// No supported slicer is installed.
     NoneInstalled,
 }
@@ -63,6 +69,7 @@ pub fn route(verdict: &Verdict, installed: &[Slicer], config: &Config) -> Route 
         },
         (None, choices) => Route::Ask {
             choices: choices.to_vec(),
+            detected: verdict.slicer,
         },
     }
 }

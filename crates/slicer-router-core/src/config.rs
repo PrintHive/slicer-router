@@ -130,6 +130,20 @@ impl Config {
         config_path_from(|name| std::env::var_os(name))
     }
 
+    /// Record the answer to a [`Route::Ask`](crate::Route::Ask).
+    ///
+    /// A file that belongs to a slicer that is not installed gets an override for
+    /// that slicer, so only its files change slicer. A file with no signal sets
+    /// the default slicer.
+    pub fn remember_choice(&mut self, detected: Option<Slicer>, chosen: Slicer) {
+        match detected {
+            Some(detected) => {
+                self.overrides.insert(detected, chosen);
+            }
+            None => self.default_slicer = Some(chosen),
+        }
+    }
+
     /// Read the config at `path`. A missing file is the default config.
     ///
     /// Fails only when the file cannot be read or is not a JSON object. Slicer
