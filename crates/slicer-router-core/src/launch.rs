@@ -8,6 +8,7 @@ use crate::discover::InstalledSlicer;
 
 /// Why a slicer could not be started.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum LaunchError {
     #[error("cannot start {}: {source}", slicer.slicer)]
     Spawn {

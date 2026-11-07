@@ -201,7 +201,7 @@ fn show_settings(app: &AppHandle, requested: bool) {
 fn get_state(shared: State<'_, Shared>) -> StateView {
     let installed = discover_installed()
         .into_iter()
-        .map(|InstalledSlicer { slicer, path }| SlicerView {
+        .map(|InstalledSlicer { slicer, path, .. }| SlicerView {
             id: slicer,
             name: slicer.display_name(),
             path,

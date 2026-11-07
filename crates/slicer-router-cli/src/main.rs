@@ -160,6 +160,7 @@ fn open(file: &Path, dry_run: bool) -> Result<ExitCode, String> {
             save_config(&config)?;
             (slicer, RouteReason::Default)
         }
+        _ => return Err("this version cannot act on the routing result".into()),
     };
     let target: &InstalledSlicer = installed
         .iter()
@@ -184,11 +185,17 @@ fn describe(verdict: &Verdict, reason: RouteReason) -> String {
         RouteReason::Override => "config override".into(),
         RouteReason::Default => "default slicer".into(),
         RouteReason::OnlyInstalled => "only installed slicer".into(),
+        other => serialized_name(&other),
     }
 }
 
 fn rule_name(verdict: &Verdict) -> String {
-    serde_json::to_value(verdict.rule)
+    serialized_name(&verdict.rule)
+}
+
+/// The kebab-case name a unit enum variant serializes to.
+fn serialized_name(value: &impl serde::Serialize) -> String {
+    serde_json::to_value(value)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default()

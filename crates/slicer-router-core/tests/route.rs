@@ -1,16 +1,13 @@
-use slicer_router_core::{route, Config, Evidence, Route, RouteReason, Rule, Slicer, Verdict};
+use slicer_router_core::{route, Config, Route, RouteReason, Rule, Slicer, Verdict};
 use Slicer::{BambuStudio, OrcaSlicer, PrusaSlicer, SnapmakerOrca};
 
 fn verdict(slicer: Option<Slicer>) -> Verdict {
-    Verdict {
-        slicer,
-        rule: if slicer.is_some() {
-            Rule::ApplicationName
-        } else {
-            Rule::NoSignal
-        },
-        evidence: Evidence::default(),
+    let mut verdict = Verdict::no_signal();
+    if slicer.is_some() {
+        verdict.slicer = slicer;
+        verdict.rule = Rule::ApplicationName;
     }
+    verdict
 }
 
 fn config_with_default(slicer: Slicer) -> Config {
@@ -123,4 +120,35 @@ fn override_only_applies_to_its_own_slicer() {
         &config,
     );
     assert_eq!(route, launch(PrusaSlicer, RouteReason::Detected));
+}
+
+#[test]
+fn routes_serialize_with_an_action_tag_and_kebab_case_names() {
+    let launch = route(
+        &verdict(Some(PrusaSlicer)),
+        &[PrusaSlicer],
+        &Config::default(),
+    );
+    assert_eq!(
+        serde_json::to_value(&launch).unwrap(),
+        serde_json::json!({"action": "launch", "slicer": "prusa-slicer", "reason": "detected"})
+    );
+    let ask = route(
+        &verdict(None),
+        &[BambuStudio, PrusaSlicer],
+        &Config::default(),
+    );
+    assert_eq!(
+        serde_json::to_value(&ask).unwrap(),
+        serde_json::json!({"action": "ask", "choices": ["bambu-studio", "prusa-slicer"]})
+    );
+    let none = route(&verdict(None), &[], &Config::default());
+    assert_eq!(
+        serde_json::to_value(&none).unwrap(),
+        serde_json::json!({"action": "none-installed"})
+    );
+    assert_eq!(
+        serde_json::to_value(RouteReason::OnlyInstalled).unwrap(),
+        "only-installed"
+    );
 }

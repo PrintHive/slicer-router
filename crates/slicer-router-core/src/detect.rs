@@ -14,6 +14,7 @@ use crate::slicer::Slicer;
 /// Which rule produced a [`Verdict`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Rule {
     /// The printer model or profile name belongs to one slicer's vendor.
     PrinterProfile,
@@ -31,6 +32,7 @@ pub enum Rule {
 
 /// The outcome of [`detect`] or [`classify`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Verdict {
     /// The slicer the file belongs to, or `None` when nothing identified it.
     pub slicer: Option<Slicer>,

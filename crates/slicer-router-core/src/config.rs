@@ -28,6 +28,7 @@ pub const CONFIG_PATH_ENV: &str = "SLICER_ROUTER_CONFIG";
 /// written back by [`Config::save`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "RawConfig")]
+#[non_exhaustive]
 pub struct Config {
     /// Opens files that no rule could attribute to a slicer.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +108,7 @@ fn known_slicer(value: &Value, what: &str, warnings: &mut Vec<String>) -> Option
 
 /// Why the config file could not be read or written.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ConfigError {
     #[error("cannot access config {}: {source}", path.display())]
     Io { path: PathBuf, source: io::Error },

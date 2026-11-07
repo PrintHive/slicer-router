@@ -27,13 +27,15 @@ const CONFIG_LIMIT: u64 = 16 << 20;
 
 /// Why a `.3mf` could not be examined at all.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum DetectError {
     #[error("cannot read {}: {source}", path.display())]
     Io { path: PathBuf, source: io::Error },
+    /// `source` is boxed so the zip library's types stay out of this crate's API.
     #[error("{} is not a valid .3mf (zip) archive: {source}", path.display())]
     NotAZip {
         path: PathBuf,
-        source: zip::result::ZipError,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
 }
 
@@ -42,6 +44,7 @@ pub enum DetectError {
 /// Each field is the trimmed, non-empty string from the config file. Config
 /// values that are one-element arrays contribute their first element.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PrinterProfile {
     /// `printer_model`, for example `Snapmaker U1` or `MK4S`.
     pub model: Option<String>,
@@ -57,6 +60,7 @@ pub struct PrinterProfile {
 
 /// Every signal read from a `.3mf`, before any rule interprets it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Evidence {
     /// `<metadata name="Application">` from `3D/3dmodel.model`, for example
     /// `BambuStudio-02.08.02.61`.
@@ -85,7 +89,7 @@ pub fn read_evidence(path: &Path) -> Result<Evidence, DetectError> {
         zip::result::ZipError::Io(source) => io_err(source),
         source => DetectError::NotAZip {
             path: path.to_owned(),
-            source,
+            source: Box::new(source),
         },
     })?;
 

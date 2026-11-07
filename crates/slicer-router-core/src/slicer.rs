@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 /// (`"snapmaker-orca"`) and matches [`Slicer::id`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Slicer {
     BambuStudio,
     OrcaSlicer,
@@ -23,6 +24,7 @@ pub enum Slicer {
 
 /// How to recognise and find one slicer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct SlicerSpec {
     /// Stable machine name, used in config files and JSON output.
     pub id: &'static str,
@@ -39,6 +41,7 @@ pub struct SlicerSpec {
 
 /// Windows discovery hints for one slicer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct WindowsHints {
     /// Executable file names, in preference order.
     pub exe_names: &'static [&'static str],
@@ -52,6 +55,7 @@ pub struct WindowsHints {
 /// Patterns that attribute a printer profile to a slicer. Empty for slicers
 /// that do not ship their own printers (OrcaSlicer).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct PrinterPatterns {
     /// Lowercase substrings matched against printer model, profile name and vendor.
     pub name_contains: &'static [&'static str],
@@ -139,7 +143,7 @@ static PRUSA_SLICER_SPEC: SlicerSpec = SlicerSpec {
 
 impl Slicer {
     /// Every supported slicer, in display order.
-    pub const ALL: [Slicer; 4] = [
+    pub const ALL: &'static [Slicer] = &[
         Slicer::BambuStudio,
         Slicer::OrcaSlicer,
         Slicer::SnapmakerOrca,
@@ -175,7 +179,8 @@ impl fmt::Display for Slicer {
 
 /// Error from parsing a slicer id.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown slicer `{0}`; expected one of: {choices}", choices = Slicer::ALL.map(Slicer::id).join(", "))]
+#[error("unknown slicer `{0}`; expected one of: {choices}", choices = Slicer::ALL.iter().map(|s| s.id()).collect::<Vec<_>>().join(", "))]
+#[non_exhaustive]
 pub struct UnknownSlicer(pub String);
 
 impl FromStr for Slicer {
@@ -184,7 +189,8 @@ impl FromStr for Slicer {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let wanted = s.trim().to_ascii_lowercase();
         Slicer::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|slicer| slicer.id() == wanted)
             .ok_or_else(|| UnknownSlicer(s.to_owned()))
     }
@@ -196,7 +202,7 @@ mod tests {
 
     #[test]
     fn serde_name_matches_registry_id() {
-        for slicer in Slicer::ALL {
+        for &slicer in Slicer::ALL {
             let json = serde_json::to_string(&slicer).unwrap();
             assert_eq!(json, format!("\"{}\"", slicer.id()));
             assert_eq!(slicer.id().parse::<Slicer>().unwrap(), slicer);

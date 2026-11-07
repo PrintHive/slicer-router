@@ -35,6 +35,10 @@ pub fn plan(files: &[PathBuf], installed: &[InstalledSlicer], config: &Config) -
                 "No supported slicer is installed, so {} was not opened.",
                 file.display()
             )),
+            _ => plan.notices.push(format!(
+                "This version cannot route {}; update Slicer Router.",
+                file.display()
+            )),
         }
     }
     plan
@@ -54,9 +58,8 @@ mod tests {
     fn installed(slicers: &[Slicer]) -> Vec<InstalledSlicer> {
         slicers
             .iter()
-            .map(|&slicer| InstalledSlicer {
-                slicer,
-                path: PathBuf::from(format!("/fake/{}", slicer.id())),
+            .map(|&slicer| {
+                InstalledSlicer::new(slicer, PathBuf::from(format!("/fake/{}", slicer.id())))
             })
             .collect()
     }

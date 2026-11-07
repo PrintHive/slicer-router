@@ -13,10 +13,18 @@ use crate::slicer::{Slicer, SlicerSpec};
 
 /// One slicer found on this machine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct InstalledSlicer {
     pub slicer: Slicer,
     /// The `.app` bundle on macOS, the executable on Windows.
     pub path: PathBuf,
+}
+
+impl InstalledSlicer {
+    /// A slicer known to be installed at `path`.
+    pub fn new(slicer: Slicer, path: PathBuf) -> Self {
+        Self { slicer, path }
+    }
 }
 
 /// The installed slicers, at most one per [`Slicer`], in [`Slicer::ALL`] order.
@@ -88,7 +96,8 @@ fn identify_bundle(app: &Path) -> Option<InstalledSlicer> {
     let id = bundle_identifier(&xml)?;
     let id = id.trim().trim_end_matches('/');
     Slicer::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|slicer| {
             slicer
                 .spec()
@@ -146,8 +155,8 @@ fn best_per_slicer(mut found: Vec<InstalledSlicer>) -> Vec<InstalledSlicer> {
         (name_len, f.path.clone())
     });
     Slicer::ALL
-        .into_iter()
-        .filter_map(|slicer| found.iter().find(|f| f.slicer == slicer).cloned())
+        .iter()
+        .filter_map(|&slicer| found.iter().find(|f| f.slicer == slicer).cloned())
         .collect()
 }
 
@@ -155,8 +164,8 @@ fn best_per_slicer(mut found: Vec<InstalledSlicer>) -> Vec<InstalledSlicer> {
 fn discover_windows(env: impl Fn(&str) -> Option<OsString>) -> Vec<InstalledSlicer> {
     let roots = program_roots(&env);
     let found = Slicer::ALL
-        .into_iter()
-        .filter_map(|slicer| {
+        .iter()
+        .filter_map(|&slicer| {
             let spec = slicer.spec();
             let mut candidates = registry_candidates(spec);
             candidates.extend(program_dirs(spec, &roots));

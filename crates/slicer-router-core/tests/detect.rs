@@ -280,7 +280,12 @@ fn garbage_file_is_an_error_not_a_panic() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("garbage.3mf");
     std::fs::write(&path, b"this is not a zip archive at all").unwrap();
-    assert!(matches!(detect(&path), Err(DetectError::NotAZip { .. })));
+    let err = detect(&path).unwrap_err();
+    assert!(matches!(err, DetectError::NotAZip { .. }), "{err}");
+    assert!(
+        std::error::Error::source(&err).is_some(),
+        "the zip failure stays reachable as the error source"
+    );
 }
 
 #[test]

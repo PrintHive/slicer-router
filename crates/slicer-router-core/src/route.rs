@@ -1,11 +1,15 @@
 //! Choose a slicer for a verdict. Pure: no filesystem, no processes.
 
+use serde::Serialize;
+
 use crate::config::Config;
 use crate::detect::Verdict;
 use crate::slicer::Slicer;
 
 /// Why a slicer was chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum RouteReason {
     /// The config maps the detected slicer to this one.
     Override,
@@ -17,8 +21,11 @@ pub enum RouteReason {
     OnlyInstalled,
 }
 
-/// What to do with a file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What to do with a file. Serializes with an `action` tag: `launch`, `ask` or
+/// `none-installed`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Route {
     /// Open the file in this slicer.
     Launch { slicer: Slicer, reason: RouteReason },

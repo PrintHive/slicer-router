@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 slicer-router-core.workspace = true
 clap = { version = "4", features = ["derive"] }
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]
