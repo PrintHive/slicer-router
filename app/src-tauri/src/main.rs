@@ -706,6 +706,54 @@ mod tests {
     }
 
     #[test]
+    fn the_whole_state_has_the_shape_the_window_reads() {
+        let mut config = Config::default();
+        config.default_slicer = Some(Slicer::BambuStudio);
+        config
+            .overrides
+            .insert(Slicer::PrusaSlicer, Slicer::OrcaSlicer);
+        let pending = [PendingFile {
+            path: "a.3mf".into(),
+            detected: None,
+        }];
+        let view = state_view(
+            vec![InstalledSlicer::new(
+                Slicer::BambuStudio,
+                "/Applications/BambuStudio.app".into(),
+            )],
+            &config,
+            Some(DefaultApp {
+                is_default: false,
+                current_name: "Bambu Studio".into(),
+            }),
+            &pending,
+            &[failure("b.3mf", "PrusaSlicer didn't start")],
+            Some("/config.json".into()),
+        );
+        assert_eq!(
+            serde_json::to_value(view).unwrap(),
+            serde_json::json!({
+                "platform": std::env::consts::OS,
+                "installed": [
+                    {"id": "bambu-studio", "name": "Bambu Studio", "path": "/Applications/BambuStudio.app"},
+                ],
+                "default_slicer": "bambu-studio",
+                "overrides": {"prusa-slicer": "orca-slicer"},
+                "default_app": {"is_default": false, "current_name": "Bambu Studio"},
+                "pending": [{"detected": null, "detected_name": null, "files": ["a.3mf"]}],
+                "failures": [{
+                    "file": "b.3mf",
+                    "slicer": "prusa-slicer",
+                    "slicer_name": "PrusaSlicer",
+                    "reason": "PrusaSlicer didn't start",
+                    "retryable": true,
+                }],
+                "config_path": "/config.json",
+            })
+        );
+    }
+
+    #[test]
     fn the_window_gets_failures_with_the_slicer_named_and_whether_to_retry() {
         let failures = [
             failure(
