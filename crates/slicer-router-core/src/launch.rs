@@ -104,14 +104,22 @@ mod tests {
 
     #[test]
     fn macos_names_the_slicer_bundle_and_windows_runs_the_executable() {
-        let command = launch_command(Path::new("/Applications/X.app"), Path::new("/tmp/a.3mf"));
+        let file = std::env::temp_dir().join("a.3mf");
+        let command = launch_command(Path::new("/Applications/X.app"), &file);
         let args: Vec<_> = command.get_args().collect();
         if cfg!(target_os = "macos") {
             assert_eq!(command.get_program(), "open");
-            assert_eq!(args, ["-a", "/Applications/X.app", "/tmp/a.3mf"]);
+            assert_eq!(
+                args,
+                [
+                    "-a".as_ref(),
+                    "/Applications/X.app".as_ref(),
+                    file.as_os_str()
+                ]
+            );
         } else {
             assert_eq!(command.get_program(), "/Applications/X.app");
-            assert_eq!(args, ["/tmp/a.3mf"]);
+            assert_eq!(args, [file.as_os_str()]);
         }
     }
 
