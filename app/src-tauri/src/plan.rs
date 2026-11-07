@@ -98,10 +98,8 @@ mod tests {
         let dir = tempfile_dir();
         let unreadable = dir.join("not-a-zip-2.3mf");
         std::fs::write(&unreadable, b"junk").unwrap();
-        let config = Config {
-            default_slicer: Some(PrusaSlicer),
-            ..Config::default()
-        };
+        let mut config = Config::default();
+        config.default_slicer = Some(PrusaSlicer);
         let plan = plan(
             std::slice::from_ref(&unreadable),
             &installed(&[BambuStudio, PrusaSlicer]),

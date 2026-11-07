@@ -85,6 +85,11 @@ Set `SLICER_ROUTER_CONFIG` to use another path.
 instead. Slicer ids are `bambu-studio`, `orca-slicer`, `snapmaker-orca` and
 `prusa-slicer`.
 
+A slicer id this version does not know is skipped with a warning instead of
+failing the whole file, and other top-level keys are kept when the router saves.
+Only a file that is not a JSON object is rejected. Choosing a default in the app
+replaces such a file.
+
 ### How slicers are found
 
 - **macOS.** Apps in `/Applications`, `~/Applications` and one folder level

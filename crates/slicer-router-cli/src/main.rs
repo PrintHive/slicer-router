@@ -223,7 +223,11 @@ fn config_path() -> Result<PathBuf, String> {
 }
 
 fn load_config() -> Result<Config, String> {
-    Config::load(&config_path()?).map_err(|e| e.to_string())
+    let config = Config::load(&config_path()?).map_err(|e| e.to_string())?;
+    for warning in &config.warnings {
+        eprintln!("warning: config: {warning}");
+    }
+    Ok(config)
 }
 
 fn save_config(config: &Config) -> Result<(), String> {

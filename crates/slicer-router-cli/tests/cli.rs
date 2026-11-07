@@ -104,3 +104,25 @@ fn open_dry_run_never_starts_a_slicer_and_names_its_choice() {
         );
     }
 }
+
+#[test]
+fn an_unknown_slicer_in_the_config_is_a_warning_not_an_error() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("config.json"),
+        r#"{"default_slicer":"cura","theme":"dark"}"#,
+    )
+    .unwrap();
+    let output = run(&dir, &["default"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout(&output).contains("No default"), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cura"), "{stderr}");
+
+    assert!(run(&dir, &["default", "orca-slicer"]).status.success());
+    let saved = std::fs::read_to_string(dir.path().join("config.json")).unwrap();
+    assert!(
+        saved.contains("orca-slicer") && saved.contains("theme"),
+        "{saved}"
+    );
+}

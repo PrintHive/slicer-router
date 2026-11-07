@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::slicer::Slicer;
 
@@ -20,13 +21,88 @@ pub const CONFIG_PATH_ENV: &str = "SLICER_ROUTER_CONFIG";
 /// ```json
 /// { "default_slicer": "orca-slicer", "overrides": { "bambu-studio": "orca-slicer" } }
 /// ```
+///
+/// Loading is lenient so that a newer or hand-edited file never locks the
+/// router out: a slicer id this version does not know is skipped with an entry
+/// in [`Config::warnings`], and top-level keys it does not know are kept and
+/// written back by [`Config::save`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "RawConfig")]
 pub struct Config {
     /// Opens files that no rule could attribute to a slicer.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_slicer: Option<Slicer>,
     /// Detected slicer to the slicer that should open its files instead.
     pub overrides: BTreeMap<Slicer, Slicer>,
+    /// What [`Config::load`] skipped, in plain words. Never saved.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+    /// Top-level keys this version does not use, kept so saving does not erase them.
+    #[serde(flatten)]
+    extra: Map<String, Value>,
+}
+
+/// The file as written, before unknown slicer ids are filtered out.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct RawConfig {
+    default_slicer: Option<Value>,
+    overrides: Option<Value>,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
+}
+
+impl From<RawConfig> for Config {
+    fn from(raw: RawConfig) -> Self {
+        let mut warnings = Vec::new();
+        let default_slicer = raw
+            .default_slicer
+            .and_then(|value| known_slicer(&value, "default_slicer", &mut warnings));
+        let mut overrides = BTreeMap::new();
+        match raw.overrides {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(entries)) => {
+                for (detected, replacement) in entries {
+                    let detected_slicer = known_slicer(
+                        &Value::String(detected.clone()),
+                        "overrides key",
+                        &mut warnings,
+                    );
+                    let replacement_slicer = known_slicer(
+                        &replacement,
+                        &format!("overrides[{detected}]"),
+                        &mut warnings,
+                    );
+                    if let (Some(detected), Some(replacement)) =
+                        (detected_slicer, replacement_slicer)
+                    {
+                        overrides.insert(detected, replacement);
+                    }
+                }
+            }
+            Some(other) => warnings.push(format!(
+                "overrides: expected an object of slicer ids, got {other}; ignored"
+            )),
+        }
+        Config {
+            default_slicer,
+            overrides,
+            warnings,
+            extra: raw.extra,
+        }
+    }
+}
+
+/// `value` as a slicer, or `None` with a warning naming `what` it was for.
+fn known_slicer(value: &Value, what: &str, warnings: &mut Vec<String>) -> Option<Slicer> {
+    let parsed = match value {
+        Value::Null => return None,
+        Value::String(id) => id.parse::<Slicer>().map_err(|err| err.to_string()),
+        other => Err(format!("{other} is not a slicer id")),
+    };
+    parsed
+        .map_err(|reason| warnings.push(format!("{what}: {reason}; ignored")))
+        .ok()
 }
 
 /// Why the config file could not be read or written.
@@ -53,6 +129,9 @@ impl Config {
     }
 
     /// Read the config at `path`. A missing file is the default config.
+    ///
+    /// Fails only when the file cannot be read or is not a JSON object. Slicer
+    /// ids this version does not know are reported in [`Config::warnings`].
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
         match fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| ConfigError::Parse {
@@ -64,6 +143,18 @@ impl Config {
                 path: path.to_owned(),
                 source,
             }),
+        }
+    }
+
+    /// Like [`Config::load`], but a file that is not valid JSON counts as empty.
+    ///
+    /// Use it before changing a setting and saving, so choosing a slicer repairs
+    /// a damaged file instead of failing on it. A file that cannot be read still
+    /// fails, because saving over it would risk losing it.
+    pub fn load_for_update(path: &Path) -> Result<Config, ConfigError> {
+        match Config::load(path) {
+            Err(ConfigError::Parse { .. }) => Ok(Config::default()),
+            loaded => loaded,
         }
     }
 

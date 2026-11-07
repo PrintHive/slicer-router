@@ -124,7 +124,12 @@ fn files_from_args(argv: &[String], cwd: &Path) -> Vec<PathBuf> {
 fn load_config_or_default() -> Config {
     let loaded = Config::default_path().map(|path| Config::load(&path));
     match loaded {
-        Some(Ok(config)) => config,
+        Some(Ok(config)) => {
+            for warning in &config.warnings {
+                eprintln!("slicer-router: config: {warning}");
+            }
+            config
+        }
         Some(Err(err)) => {
             eprintln!("slicer-router: {err}; using defaults");
             Config::default()
@@ -221,11 +226,11 @@ fn get_state(shared: State<'_, Shared>) -> StateView {
 }
 
 /// Remember `slicer` for files with no detectable origin, then open any files
-/// that were waiting for that choice.
+/// that were waiting for that choice. A damaged config file is replaced.
 #[tauri::command]
 fn set_default(app: AppHandle, shared: State<'_, Shared>, slicer: Slicer) -> Result<(), String> {
     let path = Config::default_path().ok_or("cannot determine the config folder")?;
-    let mut config = Config::load(&path).map_err(|e| e.to_string())?;
+    let mut config = Config::load_for_update(&path).map_err(|e| e.to_string())?;
     config.default_slicer = Some(slicer);
     config.save(&path).map_err(|e| e.to_string())?;
 
