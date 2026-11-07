@@ -126,8 +126,11 @@ fn refresh_thumbnails(installed: Vec<InstalledSlicer>, config: &Config) {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn();
-            if let Err(err) = reset {
-                eprintln!("slicer-router: cannot reset the Quick Look cache: {err}");
+            match reset {
+                Ok(mut child) => {
+                    std::thread::spawn(move || child.wait());
+                }
+                Err(err) => eprintln!("slicer-router: cannot reset the Quick Look cache: {err}"),
             }
         }
         Err(err) => eprintln!(
