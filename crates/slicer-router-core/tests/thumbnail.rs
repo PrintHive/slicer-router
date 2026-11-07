@@ -22,7 +22,7 @@ fn relationships(thumbnail: &str) -> Vec<u8> {
 }
 
 #[test]
-fn the_package_thumbnail_wins_over_the_plate_preview() {
+fn the_plate_preview_wins_over_the_cover_the_package_names() {
     let dir = TempDir::new().unwrap();
     let file = ThreeMf::new()
         .model(None)
@@ -33,18 +33,7 @@ fn the_package_thumbnail_wins_over_the_plate_preview() {
         .entry("Metadata/plate_1.png", png("plate"))
         .entry("Auxiliaries/.thumbnails/thumbnail_3mf.png", png("cover"))
         .write(dir.path(), "makerworld.3mf");
-    assert_eq!(read_thumbnail(&file).unwrap(), Some(png("cover")));
-}
-
-#[test]
-fn a_named_thumbnail_that_was_never_written_falls_back_to_plate_1() {
-    let dir = TempDir::new().unwrap();
-    let file = ThreeMf::new()
-        .model(None)
-        .entry("_rels/.rels", relationships("/Metadata/plate_7.png"))
-        .entry("Metadata/plate_1.png", png("plate 1"))
-        .write(dir.path(), "trimmed.3mf");
-    assert_eq!(read_thumbnail(&file).unwrap(), Some(png("plate 1")));
+    assert_eq!(read_thumbnail(&file).unwrap(), Some(png("plate")));
 }
 
 #[test]
@@ -58,21 +47,37 @@ fn prusaslicer_thumbnail_is_found_without_relationships() {
 }
 
 #[test]
-fn a_jpeg_thumbnail_is_kept_and_other_bytes_are_skipped() {
+fn the_package_thumbnail_is_used_when_no_known_preview_exists() {
     let dir = TempDir::new().unwrap();
+    let file = ThreeMf::new()
+        .model(None)
+        .entry("_rels/.rels", relationships("/Metadata/plate_7.png"))
+        .entry("Metadata/plate_7.png", png("plate 7"))
+        .write(dir.path(), "plate-7.3mf");
+    assert_eq!(read_thumbnail(&file).unwrap(), Some(png("plate 7")));
+
     let jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3];
     let file = ThreeMf::new()
         .entry("_rels/.rels", relationships("/Metadata/cover.jpg"))
         .entry("Metadata/cover.jpg", jpeg.clone())
         .write(dir.path(), "jpeg.3mf");
     assert_eq!(read_thumbnail(&file).unwrap(), Some(jpeg));
+}
+
+#[test]
+fn an_entry_that_is_not_an_image_is_skipped() {
+    let dir = TempDir::new().unwrap();
+    let file = ThreeMf::new()
+        .entry("Metadata/plate_1.png", b"not an image".to_vec())
+        .entry("Metadata/thumbnail.png", png("prusa"))
+        .write(dir.path(), "junk-plate.3mf");
+    assert_eq!(read_thumbnail(&file).unwrap(), Some(png("prusa")));
 
     let file = ThreeMf::new()
         .entry("_rels/.rels", relationships("/Metadata/notes.txt"))
         .entry("Metadata/notes.txt", b"not an image".to_vec())
-        .entry("Metadata/plate_1.png", png("plate"))
         .write(dir.path(), "text.3mf");
-    assert_eq!(read_thumbnail(&file).unwrap(), Some(png("plate")));
+    assert_eq!(read_thumbnail(&file).unwrap(), None);
 }
 
 #[test]

@@ -24,9 +24,8 @@ const PACKAGE_RELATIONSHIPS_ENTRY: &str = "_rels/.rels";
 /// The Open Packaging Conventions relationship type for a package thumbnail.
 const THUMBNAIL_RELATIONSHIP: &str =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail";
-/// Where slicers store the preview when the package names none, or names one it
-/// left out: Bambu Studio and the Orca family, then PrusaSlicer.
-const THUMBNAIL_FALLBACKS: [&str; 2] = ["Metadata/plate_1.png", "Metadata/thumbnail.png"];
+/// Where slicers store the preview: Bambu Studio and the Orca family, then PrusaSlicer.
+const THUMBNAIL_ENTRIES: [&str; 2] = ["Metadata/plate_1.png", "Metadata/thumbnail.png"];
 
 /// The `<metadata>` block sits at the top of the model XML, ahead of any geometry.
 const MODEL_HEAD_LIMIT: u64 = 1 << 20;
@@ -142,28 +141,29 @@ pub fn read_evidence(path: &Path) -> Result<Evidence, DetectError> {
 
 /// The preview image the `.3mf` at `path` carries: PNG or JPEG bytes, as stored.
 ///
-/// The package thumbnail named in `_rels/.rels` comes first. Slicers point it at
-/// a plate preview, and MakerWorld downloads at the model's cover. Then come
-/// `Metadata/plate_1.png` and `Metadata/thumbnail.png`, because some exports name
-/// a thumbnail they never wrote. An entry over 4 MiB, or one that is not a PNG
-/// or JPEG, is skipped.
+/// `Metadata/plate_1.png` comes first (Bambu Studio and the Orca family), then
+/// `Metadata/thumbnail.png` (PrusaSlicer), then the package thumbnail that
+/// `_rels/.rels` names. In that order a MakerWorld download shows its 512 pixel
+/// plate render instead of the 240 by 180 cover its package names. An entry over
+/// 4 MiB, or one that is not a PNG or JPEG, is skipped.
 ///
 /// Fails only when the file is not a readable zip archive. A zip without a
 /// preview yields `None`.
 pub fn read_thumbnail(path: &Path) -> Result<Option<Vec<u8>>, DetectError> {
     let mut archive = open_archive(path)?;
+    if let Some(image) = THUMBNAIL_ENTRIES
+        .into_iter()
+        .find_map(|name| read_image(&mut archive, name))
+    {
+        return Ok(Some(image));
+    }
     let named = read_capped(
         &mut archive,
         PACKAGE_RELATIONSHIPS_ENTRY,
         RELATIONSHIPS_LIMIT,
     )
     .and_then(|rels| thumbnail_target(&rels));
-    let candidates = named
-        .into_iter()
-        .chain(THUMBNAIL_FALLBACKS.map(str::to_owned));
-    Ok(candidates
-        .filter_map(|name| read_capped(&mut archive, &name, THUMBNAIL_LIMIT))
-        .find(|bytes| is_png_or_jpeg(bytes)))
+    Ok(named.and_then(|name| read_image(&mut archive, &name)))
 }
 
 fn open_archive(path: &Path) -> Result<ZipArchive<BufReader<File>>, DetectError> {
@@ -197,6 +197,11 @@ fn read_capped<R: Read + io::Seek>(
     let mut bytes = Vec::new();
     entry.take(limit + 1).read_to_end(&mut bytes).ok()?;
     (bytes.len() as u64 <= limit).then_some(bytes)
+}
+
+/// The entry `name` when it is a PNG or JPEG of at most 4 MiB.
+fn read_image<R: Read + io::Seek>(archive: &mut ZipArchive<R>, name: &str) -> Option<Vec<u8>> {
+    read_capped(archive, name, THUMBNAIL_LIMIT).filter(|bytes| is_png_or_jpeg(bytes))
 }
 
 /// The entry named by the package thumbnail relationship in `_rels/.rels`.
