@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 slicer-router-core.workspace = true
+base64 = "0.23"
 serde.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"

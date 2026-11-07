@@ -11,11 +11,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod failure;
+mod icons;
 mod overrides;
 mod pending;
 mod plan;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -41,6 +42,9 @@ struct Shared {
     pending: Mutex<Vec<PendingFile>>,
     /// Files that did not open, shown until the person dismisses them.
     failures: Mutex<Vec<Failure>>,
+    /// Slicer icons read from their apps, by app path. `None` is an app without a
+    /// readable icon, remembered so it is not read again.
+    icons: Mutex<HashMap<PathBuf, Option<String>>>,
     /// A file arrived since launch.
     got_files: AtomicBool,
     /// The person asked for the window (direct launch or reopen), so it stays
@@ -192,6 +196,7 @@ fn run_app(failures: Option<Vec<Failure>>) {
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
             get_state,
+            slicer_icons,
             choose,
             set_override,
             retry_failures,
@@ -376,6 +381,43 @@ fn state_view(
         failures: failures_view(failures),
         config_path,
     }
+}
+
+/// The icon of each installed slicer as a PNG data URL, or `null` when its app
+/// has none the window can read. Reading is slow enough to keep off the main
+/// thread, so [`get_state`] does not carry it.
+#[tauri::command]
+async fn slicer_icons(
+    shared: State<'_, Shared>,
+) -> Result<BTreeMap<Slicer, Option<String>>, String> {
+    let installed = discover_installed();
+    let unread: Vec<PathBuf> = {
+        let cache = shared.icons.lock().unwrap();
+        installed
+            .iter()
+            .map(|i| i.path.clone())
+            .filter(|path| !cache.contains_key(path))
+            .collect()
+    };
+    if !unread.is_empty() {
+        let read = tauri::async_runtime::spawn_blocking(move || {
+            unread
+                .into_iter()
+                .map(|path| {
+                    let icon = icons::png_data_url(&path);
+                    (path, icon)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|err| err.to_string())?;
+        shared.icons.lock().unwrap().extend(read);
+    }
+    let cache = shared.icons.lock().unwrap();
+    Ok(installed
+        .into_iter()
+        .map(|i| (i.slicer, cache.get(&i.path).cloned().flatten()))
+        .collect())
 }
 
 /// Send files detected as `detected` to `slicer` instead, or back to where their
