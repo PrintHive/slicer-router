@@ -3210,9 +3210,12 @@ dependencies = [
  "serde",
  "serde_json",
  "slicer-router-core",
+ "slicer-router-macos",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "winreg 0.55.0",
+ "zip",
 ]
 
 [[package]]

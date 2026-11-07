@@ -15,10 +15,15 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 slicer-router-core.workspace = true
+slicer-router-macos = { path = "../../crates/slicer-router-macos" }
 base64 = "0.23"
 serde.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
+zip.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 
 [dev-dependencies]
 serde_json.workspace = true

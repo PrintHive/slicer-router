@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod default_app;
 mod failure;
 mod icons;
 mod overrides;
@@ -23,6 +24,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use default_app::DefaultApp;
 use failure::{launch_reason, Failure};
 use pending::PendingFile;
 use plan::{launch_all, plan, startup, Plan, Startup};
@@ -96,6 +98,8 @@ struct StateView {
     default_slicer: Option<Slicer>,
     /// Detected slicer to the slicer that opens its files instead.
     overrides: BTreeMap<Slicer, Slicer>,
+    /// Who opens `.3mf` files, or `null` when the platform cannot say.
+    default_app: Option<DefaultApp>,
     pending: Vec<PendingGroupView>,
     failures: Vec<FailureView>,
     config_path: Option<PathBuf>,
@@ -199,6 +203,8 @@ fn run_app(failures: Option<Vec<Failure>>) {
             slicer_icons,
             choose,
             set_override,
+            make_default_app,
+            reveal_example_3mf,
             retry_failures,
             open_failures_in,
             dismiss_failures
@@ -348,10 +354,11 @@ fn show_settings(app: &AppHandle, requested: bool) {
 }
 
 #[tauri::command]
-fn get_state(shared: State<'_, Shared>) -> StateView {
+fn get_state(app: AppHandle, shared: State<'_, Shared>) -> StateView {
     state_view(
         discover_installed(),
         &load_config_or_default(),
+        default_app::status(&app.config().identifier),
         &shared.pending.lock().unwrap(),
         &shared.failures.lock().unwrap(),
         Config::default_path(),
@@ -361,6 +368,7 @@ fn get_state(shared: State<'_, Shared>) -> StateView {
 fn state_view(
     installed: Vec<InstalledSlicer>,
     config: &Config,
+    default_app: Option<DefaultApp>,
     pending: &[PendingFile],
     failures: &[Failure],
     config_path: Option<PathBuf>,
@@ -377,6 +385,7 @@ fn state_view(
             .collect(),
         default_slicer: config.default_slicer,
         overrides: config.overrides.clone(),
+        default_app,
         pending: pending_view(pending),
         failures: failures_view(failures),
         config_path,
@@ -418,6 +427,19 @@ async fn slicer_icons(
         .into_iter()
         .map(|i| (i.slicer, cache.get(&i.path).cloned().flatten()))
         .collect())
+}
+
+/// Make Slicer Router the app that opens `.3mf` files. macOS only.
+#[tauri::command]
+fn make_default_app(app: AppHandle) -> Result<(), String> {
+    default_app::make_default(&app.config().identifier)
+}
+
+/// Select a small `.3mf` in Explorer for the person to open with Slicer Router.
+/// Windows only.
+#[tauri::command]
+fn reveal_example_3mf() -> Result<(), String> {
+    default_app::reveal_example()
 }
 
 /// Send files detected as `detected` to `slicer` instead, or back to where their
@@ -611,6 +633,10 @@ mod tests {
                 "/Applications/BambuStudio.app".into(),
             )],
             &config,
+            Some(DefaultApp {
+                is_default: false,
+                current_name: "Bambu Studio".into(),
+            }),
             &pending,
             &[failure("b.3mf", "PrusaSlicer didn't start")],
             Some("/config.json".into()),
@@ -624,6 +650,7 @@ mod tests {
                 ],
                 "default_slicer": "bambu-studio",
                 "overrides": {"prusa-slicer": "orca-slicer"},
+                "default_app": {"is_default": false, "current_name": "Bambu Studio"},
                 "pending": [{"detected": null, "detected_name": null, "files": ["a.3mf"]}],
                 "failures": [{
                     "file": "b.3mf",
