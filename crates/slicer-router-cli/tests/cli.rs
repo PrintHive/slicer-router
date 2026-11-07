@@ -88,7 +88,7 @@ fn default_is_stored_in_the_config_file() {
 }
 
 #[test]
-fn open_dry_run_never_starts_a_slicer_and_names_its_choice() {
+fn open_dry_run_names_its_choice_and_saves_nothing() {
     let dir = TempDir::new().unwrap();
     let file = fixture("real-snapmaker-orca-u1.3mf");
     let output = run(&dir, &["open", file.to_str().unwrap(), "--dry-run"]);
@@ -97,12 +97,13 @@ fn open_dry_run_never_starts_a_slicer_and_names_its_choice() {
     if output.status.success() {
         assert!(text.contains("real-snapmaker-orca-u1.3mf ->"), "{text}");
     } else {
-        // A machine without that slicer and with several others needs a default first.
-        assert!(
-            stderr.contains("no default slicer") || stderr.contains("no supported slicer"),
-            "{stderr}"
-        );
+        // A machine with no supported slicer has nothing to choose from.
+        assert!(stderr.contains("no supported slicer"), "{stderr}");
     }
+    assert!(
+        !dir.path().join("config.json").exists(),
+        "a dry run wrote the config"
+    );
 }
 
 #[test]

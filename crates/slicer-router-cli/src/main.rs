@@ -152,7 +152,20 @@ fn open(file: &Path, dry_run: bool) -> Result<ExitCode, String> {
     let slicers: Vec<Slicer> = installed.iter().map(|i| i.slicer).collect();
 
     let route = route(&verdict, &slicers, &config);
-    let (slicer, reason) = choose(route, &mut config, &config_path()?, ask_on_terminal)?;
+    let chosen = choose(
+        route,
+        &mut config,
+        &config_path()?,
+        dry_run,
+        ask_on_terminal,
+    )?;
+    let (slicer, reason) = match chosen {
+        Chosen::Slicer(slicer, reason) => (slicer, reason),
+        Chosen::WouldAsk { detected, choices } => {
+            println!("{} -> {}", file.display(), would_ask(detected, &choices));
+            return Ok(ExitCode::SUCCESS);
+        }
+    };
     let target: &InstalledSlicer = installed
         .iter()
         .find(|i| i.slicer == slicer)
@@ -170,17 +183,31 @@ fn open(file: &Path, dry_run: bool) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// How a route settled.
+#[derive(Debug, PartialEq)]
+enum Chosen {
+    Slicer(Slicer, RouteReason),
+    /// A dry run reached a question. It was not asked and nothing was saved.
+    WouldAsk {
+        detected: Option<Slicer>,
+        choices: Vec<Slicer>,
+    },
+}
+
 /// Settle a route on one slicer. A question goes to `ask`, and the answer is
-/// remembered in `config` and saved to `config_path`.
+/// remembered in `config` and saved to `config_path`. A dry run never asks and
+/// never saves.
 fn choose(
     route: Route,
     config: &mut Config,
     config_path: &Path,
+    dry_run: bool,
     ask: impl FnOnce(Option<Slicer>, &[Slicer]) -> Result<Slicer, String>,
-) -> Result<(Slicer, RouteReason), String> {
+) -> Result<Chosen, String> {
     match route {
-        Route::Launch { slicer, reason } => Ok((slicer, reason)),
+        Route::Launch { slicer, reason } => Ok(Chosen::Slicer(slicer, reason)),
         Route::NoneInstalled => Err("no supported slicer is installed".into()),
+        Route::Ask { choices, detected } if dry_run => Ok(Chosen::WouldAsk { detected, choices }),
         Route::Ask { choices, detected } => {
             let slicer = ask(detected, &choices)?;
             config.remember_choice(detected, slicer);
@@ -190,7 +217,7 @@ fn choose(
             } else {
                 RouteReason::Default
             };
-            Ok((slicer, reason))
+            Ok(Chosen::Slicer(slicer, reason))
         }
         _ => Err("this version cannot act on the routing result".into()),
     }
@@ -224,6 +251,19 @@ fn heading(detected: Option<Slicer>) -> String {
         Some(slicer) => format!("{slicer} isn't installed. Open this file with:"),
         None => "This file has no slicer metadata. Open with:".into(),
     }
+}
+
+/// What a dry run reports instead of asking.
+fn would_ask(detected: Option<Slicer>, choices: &[Slicer]) -> String {
+    let names: Vec<String> = choices.iter().map(Slicer::to_string).collect();
+    let why = match detected {
+        Some(slicer) => format!("{slicer} isn't installed"),
+        None => "no slicer metadata and no default slicer".to_owned(),
+    };
+    format!(
+        "{why}, so it would ask which slicer to use ({})",
+        names.join(", ")
+    )
 }
 
 /// What the answer will be used for, shown in the prompt.
@@ -309,10 +349,11 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("config.json");
         let mut config = Config::default();
-        let (slicer, reason) = choose(
+        let chosen = choose(
             ask_route(Some(SnapmakerOrca)),
             &mut config,
             &path,
+            false,
             |detected, choices| {
                 assert_eq!(detected, Some(SnapmakerOrca));
                 assert_eq!(choices, [BambuStudio, PrusaSlicer]);
@@ -320,7 +361,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!((slicer, reason), (PrusaSlicer, RouteReason::Override));
+        assert_eq!(chosen, Chosen::Slicer(PrusaSlicer, RouteReason::Override));
 
         let saved = Config::load(&path).unwrap();
         assert_eq!(saved.default_slicer, None);
@@ -332,12 +373,66 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("config.json");
         let mut config = Config::default();
-        let (slicer, reason) =
-            choose(ask_route(None), &mut config, &path, |_, _| Ok(BambuStudio)).unwrap();
-        assert_eq!((slicer, reason), (BambuStudio, RouteReason::Default));
+        let chosen = choose(ask_route(None), &mut config, &path, false, |_, _| {
+            Ok(BambuStudio)
+        })
+        .unwrap();
+        assert_eq!(chosen, Chosen::Slicer(BambuStudio, RouteReason::Default));
 
         let saved = Config::load(&path).unwrap();
         assert_eq!(saved.default_slicer, Some(BambuStudio));
         assert!(saved.overrides.is_empty());
+    }
+
+    #[test]
+    fn a_dry_run_never_asks_and_never_saves() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        for detected in [None, Some(SnapmakerOrca)] {
+            let mut config = Config::default();
+            let chosen = choose(ask_route(detected), &mut config, &path, true, |_, _| {
+                panic!("a dry run must not ask")
+            })
+            .unwrap();
+            assert_eq!(
+                chosen,
+                Chosen::WouldAsk {
+                    detected,
+                    choices: vec![BambuStudio, PrusaSlicer]
+                }
+            );
+            assert_eq!(
+                config,
+                Config::default(),
+                "the in-memory config is untouched"
+            );
+            assert!(!path.exists(), "a dry run created {}", path.display());
+        }
+    }
+
+    #[test]
+    fn a_dry_run_still_reports_a_direct_launch() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let route = Route::Launch {
+            slicer: PrusaSlicer,
+            reason: RouteReason::Detected,
+        };
+        let chosen = choose(
+            route,
+            &mut Config::default(),
+            &dir.path().join("c.json"),
+            true,
+            |_, _| panic!("no question expected"),
+        )
+        .unwrap();
+        assert_eq!(chosen, Chosen::Slicer(PrusaSlicer, RouteReason::Detected));
+    }
+
+    #[test]
+    fn the_dry_run_report_names_the_missing_slicer() {
+        let text = would_ask(Some(SnapmakerOrca), &[BambuStudio, PrusaSlicer]);
+        assert!(text.contains("Snapmaker Orca isn't installed"), "{text}");
+        assert!(text.contains("Bambu Studio, PrusaSlicer"), "{text}");
+        assert!(would_ask(None, &[BambuStudio]).contains("no default slicer"));
     }
 }
