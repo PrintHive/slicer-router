@@ -148,13 +148,18 @@ fn read_prog_id(key: &str) -> Option<String> {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
     use winreg::RegKey;
 
-    RegKey::predef(HKEY_CURRENT_USER)
+    let choice = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey_with_flags(
             format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.3mf\{key}"),
             KEY_READ,
         )
-        .ok()?
-        .get_value("ProgId")
+        .ok()?;
+    // UserChoiceLatest keeps the ProgId in a ProgId subkey; UserChoice keeps it
+    // as a value on the key itself.
+    choice
+        .open_subkey_with_flags("ProgId", KEY_READ)
+        .and_then(|sub| sub.get_value("ProgId"))
+        .or_else(|_| choice.get_value("ProgId"))
         .ok()
 }
 

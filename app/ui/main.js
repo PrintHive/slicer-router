@@ -82,7 +82,7 @@ async function load() {
     state = await invoke("get_state");
   } catch (error) {
     ui.problem = String(error);
-    if (ui.data) render();
+    render();
     return;
   }
   const text = JSON.stringify(state);
@@ -123,7 +123,10 @@ async function command(name, args) {
 /* Main view */
 
 function render() {
-  if (!ui.data) return;
+  if (!ui.data) {
+    view.replaceChildren(...compact([ui.problem && problemCard(ui.problem)]));
+    return;
+  }
   const waiting = new Set(ui.data.pending.map(questionKey));
   for (const key of ui.deferred) if (!waiting.has(key)) ui.deferred.delete(key);
   renderView();
@@ -172,10 +175,11 @@ function problemCard(message) {
         "data-key": "problem-dismiss",
         onclick: () => {
           ui.problem = null;
-          render();
+          if (ui.data) render();
+          else refresh();
         },
       },
-      "Dismiss",
+      ui.data ? "Dismiss" : "Try again",
     ),
   );
 }
@@ -392,6 +396,7 @@ async function chooseDefault(slicer) {
   const waiting = ui.data.pending.find((group) => group.detected === null);
   if (!(await command("choose", { detected: null, slicer: slicer.id }))) return;
   await refresh();
+  if (waiting && failureShowing()) return;
   toast(
     waiting
       ? `Opening ${files(waiting.files.length)} in ${slicer.name}`
