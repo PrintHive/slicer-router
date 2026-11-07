@@ -104,7 +104,7 @@ fn by_printer_profile(evidence: &Evidence) -> Option<(Slicer, Rule)> {
 #[derive(Clone, Copy)]
 enum Release {
     Any,
-    /// Bambu Studio's zero-padded four-part release, for example `02.08.02.61`.
+    /// Bambu Studio's four-part release, for example `02.08.02.61` or `02.10.00.100`.
     BambuFourPart,
     /// Any version that is not [`Release::BambuFourPart`].
     NotBambuFourPart,
@@ -117,7 +117,7 @@ impl Release {
             parts.len() == 4
                 && parts
                     .iter()
-                    .all(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_digit()))
+                    .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
         };
         match self {
             Release::Any => true,
@@ -130,7 +130,9 @@ impl Release {
 /// `Application` metadata values, in match order.
 ///
 /// OrcaSlicer 2.3 and Snapmaker Orca 2.2 write `BambuStudio-<their own version>`,
-/// a three-part number, which is why the Bambu prefix has two rows.
+/// a three-part number, which is why the Bambu prefix has two rows. Bambu
+/// Studio's own releases have four numeric parts, and a part may outgrow two
+/// digits (`02.10.00.100`).
 const APPLICATION_SIGNATURES: &[(&str, Release, Slicer, Rule)] = &[
     (
         "BambuStudio-",

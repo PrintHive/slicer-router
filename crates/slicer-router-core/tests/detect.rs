@@ -40,6 +40,26 @@ fn bambu_release_number_alone_means_bambu_studio() {
 }
 
 #[test]
+fn bambu_release_parts_may_be_any_width() {
+    for version in ["02.10.00.100", "1.10.1.50"] {
+        let verdict = detect_fixture(ThreeMf::new().model(Some(&format!("BambuStudio-{version}"))));
+        assert_verdict(&verdict, Some(Slicer::BambuStudio), Rule::ApplicationName);
+    }
+}
+
+#[test]
+fn bambu_tag_with_a_non_numeric_part_is_the_orca_family() {
+    for version in ["02.08.02.", "02.08.02.61-beta", "2.3.1.x", "1.2.3.4.5"] {
+        let verdict = detect_fixture(ThreeMf::new().model(Some(&format!("BambuStudio-{version}"))));
+        assert_verdict(
+            &verdict,
+            Some(Slicer::OrcaSlicer),
+            Rule::ApplicationBambuFork,
+        );
+    }
+}
+
+#[test]
 fn orcaslicer_saving_a_snapmaker_u1_project_goes_to_snapmaker_orca() {
     let verdict = detect_fixture(
         ThreeMf::new()

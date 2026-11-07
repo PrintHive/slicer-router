@@ -29,8 +29,8 @@ printer a project was prepared for outranks the program that saved it.
 | 1 | `printer-profile` | Printer model, preset name or vendor contains `Snapmaker` | Snapmaker Orca |
 | 1 | `printer-profile` | ... contains `Bambu` | Bambu Studio |
 | 1 | `printer-profile` | ... contains `Prusa`, has the `PRINTER_VENDOR_PRUSA3D` marker, or the model is exactly `MK3`, `MK3S`, `MK3.5`, `MK4`, `MK4S`, `MINI`, `XL`, `CORE One` and similar | PrusaSlicer |
-| 2 | `application-name` | `Application` is `BambuStudio-NN.NN.NN.NN` (four zero-padded parts, for example `02.08.02.61`) | Bambu Studio |
-| 2 | `application-bambu-fork` | `Application` is `BambuStudio-` followed by any other version (for example `BambuStudio-2.3.1`) | OrcaSlicer |
+| 2 | `application-name` | `Application` is `BambuStudio-` followed by four numeric parts (for example `02.08.02.61` or `02.10.00.100`) | Bambu Studio |
+| 2 | `application-bambu-fork` | `Application` is `BambuStudio-` followed by anything else (for example `BambuStudio-2.3.1`) | OrcaSlicer |
 | 2 | `application-name` | `Application` starts with `OrcaSlicer-` | OrcaSlicer |
 | 2 | `application-name` | `Application` starts with `Snapmaker_Orca-` | Snapmaker Orca |
 | 2 | `application-name` | `Application` starts with `PrusaSlicer-` | PrusaSlicer |
