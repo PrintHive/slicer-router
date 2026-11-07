@@ -10,7 +10,8 @@ The project has three parts:
 | --- | --- |
 | `crates/slicer-router-core` | Rust library: read a `.3mf`, decide which slicer owns it, find installed slicers, launch one. No GUI dependencies. |
 | `crates/slicer-router-cli` | The `slicer-router` command. |
-| `app/` | A small Tauri 2 app, "Slicer Router", that registers as the `.3mf` file handler on macOS and Windows. |
+| `crates/slicer-router-ffi` | A static library with a C interface, linked into the macOS thumbnail extension. The only crate that allows unsafe code. |
+| `app/` | A small Tauri 2 app, "Slicer Router", that registers as the `.3mf` file handler on macOS and Windows. On macOS it carries a Finder thumbnail extension, in `app/macos/ThumbnailExtension`. |
 
 ## How a file is routed
 
@@ -78,6 +79,9 @@ A JSON file, created when you pick a default:
 
 Set `SLICER_ROUTER_CONFIG` to use another path.
 
+On macOS the app also keeps `routing-snapshot.json` beside the config file for
+the Finder thumbnails. See [Finder thumbnails](#finder-thumbnails).
+
 ```json
 {
   "default_slicer": "orca-slicer",
@@ -125,6 +129,50 @@ app has to start first. That event arrives before the launch finishes (about
 files came. It shows the settings window only for a direct launch, with no timer
 and no window to take back.
 
+## Finder thumbnails
+
+On macOS, Finder shows each `.3mf` with the slicer it will open in. The
+thumbnail is the plate preview the file carries, or a plain card with the file's
+name when it has none. The icon of the slicer that will open the file sits in the
+bottom-right corner. The router chooses that slicer exactly as it does when the
+file is opened: an override, the detected slicer, your default slicer, or the
+only slicer installed. When it would ask which slicer to use, or no slicer is
+installed, the corner shows Slicer Router's own icon.
+
+The preview is `Metadata/plate_1.png` (Bambu Studio, OrcaSlicer, Snapmaker Orca),
+then `Metadata/thumbnail.png` (PrusaSlicer), then whatever image the package
+names in `_rels/.rels`. MakerWorld downloads name a 240 by 180 cover there, so the
+512 by 512 plate render is preferred. Images over 4 MiB, or over 16 megapixels,
+are skipped.
+
+How it fits together:
+
+- `Slicer Router.app/Contents/PlugIns/SlicerRouterThumbnail.appex` is a Quick Look
+  thumbnail extension written in Swift. It runs in a sandbox, so it can neither
+  look for installed slicers nor read the config.
+- Each time the app runs, which is every time a `.3mf` is opened, and after you
+  choose a slicer in its window, it writes `routing-snapshot.json` beside
+  `config.json`: the installed slicers, the default slicer and the overrides. The
+  extension may read that one folder and routes each file with the same code.
+- When the snapshot changes, the app resets the Quick Look thumbnail cache
+  (`qlmanage -r cache`). Quick Look keeps a thumbnail until the file itself
+  changes, so without the reset Finder would keep the old badges.
+- The CLI does not write the snapshot. A default set with `slicer-router default`
+  shows in Finder after the app next runs.
+- The slicers claim `.3mf` by file extension and declare no file type, and a
+  Quick Look extension can only target a declared type. The app declares
+  `com.shapr3d.3d-manufacturing.3mf` exactly as Shapr3D does, so `.3mf` has the
+  same type whether Shapr3D is installed or not.
+
+To see a thumbnail without Finder:
+
+```sh
+qlmanage -r cache
+qlmanage -x -t -s 512 -o /tmp model.3mf   # writes /tmp/model.3mf.png
+```
+
+`-x` matters. Without it, `qlmanage -t` hung on these thumbnails on macOS 26.5.
+
 ## Install
 
 There are no prebuilt releases yet. Build from source. The core and CLI crates
@@ -135,17 +183,23 @@ need Rust 1.88 or newer. The app needs 1.90 or newer, because Tauri 2 does.
 cargo install --path crates/slicer-router-cli
 
 # App (needs the Tauri CLI once: cargo install tauri-cli --version "^2" --locked)
-cd app/src-tauri
-cargo tauri build --bundles app    # macOS
-cargo tauri build --bundles nsis   # Windows
+scripts/build-macos.sh --no-sign   # macOS, with the thumbnail extension, ad hoc signed
+cd app/src-tauri && cargo tauri build --bundles nsis   # Windows
 ```
 
 The output lands in the workspace's `target` folder at the repository root, not
-under `app/src-tauri`: `target/release/bundle/macos/Slicer Router.app` on macOS
-and `target/release/bundle/nsis/*.exe` on Windows.
+under `app/src-tauri`: `target/aarch64-apple-darwin/release/bundle/macos/Slicer Router.app`
+and `SlicerRouter-<version>-arm64.zip` beside it on macOS, and
+`target/release/bundle/nsis/*.exe` on Windows. The macOS build is for Apple
+silicon only.
 
-On macOS copy `Slicer Router.app` to `/Applications`. The build is ad-hoc signed,
-so the first launch may need right-click, Open.
+On macOS copy `Slicer Router.app` to `/Applications` and open it once, so it
+records the installed slicers for the thumbnails. An ad hoc signed build may need
+right-click, Open the first time. Thumbnails have been verified only with a
+Developer ID signed build (below).
+
+`cargo tauri build --bundles app` alone still builds the app, without the
+thumbnail extension.
 
 The crates are not published to crates.io (`publish = false`). Depend on the core
 crate as a git dependency, pinned to a release tag:
@@ -153,6 +207,23 @@ crate as a git dependency, pinned to a release tag:
 ```toml
 slicer-router-core = { git = "https://github.com/PrintHive/slicer-router", tag = "<release tag>" }
 ```
+
+### Signed and notarized macOS builds
+
+```sh
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+scripts/build-macos.sh --notarize --out dist
+```
+
+The script builds `slicer-router-ffi` as a static library and the app with Tauri,
+compiles the extension with `swiftc` (no Xcode project), and puts it in
+`Contents/PlugIns`. It signs the extension with its sandbox entitlements
+(`app/macos/ThumbnailExtension/SlicerRouterThumbnail.entitlements`) and then the
+app, both with the hardened runtime and without `--deep`, which would re-sign
+the extension without its sandbox. `--notarize` submits the zip with the
+`notarytool` keychain profile named by `NOTARY_PROFILE` (default
+`slicer-router`), waits, and staples the ticket. Create the profile once with
+`xcrun notarytool store-credentials slicer-router`.
 
 ## Make Slicer Router the default .3mf app
 
@@ -219,7 +290,9 @@ for an unreadable file, so the chosen slicer shows its own error.
 ## Status
 
 Verified on macOS: detection against real slicer output, discovery of the four
-slicers, and the app opening files in the right slicer end to end.
+slicers, the app opening files in the right slicer end to end, and thumbnails
+rendered through Quick Look for real Bambu Studio, Snapmaker Orca, OrcaSlicer and
+PrusaSlicer files.
 
 Not yet run on Windows. The core crate type-checks and passes clippy for
 `x86_64-pc-windows-msvc`, and the CI workflow runs the tests there, but registry
