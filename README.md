@@ -149,6 +149,19 @@ under Open with, then click Change All.
 
 **Windows.** Settings, Apps, Default apps, search for `.3mf`, choose Slicer Router.
 
+Then turn off "Associate .3mf files" in the preferences of Bambu Studio,
+OrcaSlicer, Snapmaker Orca and PrusaSlicer (the label varies a little). Each of
+them rewrites `HKCU\Software\Classes\.3mf` to itself every time it starts while
+that option is on, and takes the association back from Slicer Router. Snapmaker
+Orca does this in `GUI_App.cpp` at startup when `associate_3mf` is true.
+
+The installer registers a project-owned file class, `PrintHive.SlicerRouter.3mf`,
+instead of a generic "3MF Project" class, and lists it under the `.3mf`
+`OpenWithProgids` key. Slicer Router therefore stays in the Default apps list even
+after a slicer has taken the `.3mf` default. This lives in
+`app/src-tauri/tauri.windows.conf.json` and `app/src-tauri/windows/hooks.nsh`, so
+the macOS bundle is unchanged.
+
 Launch Slicer Router directly to see the installed slicers, pick the slicer for
 files with no origin, and read these steps again.
 
