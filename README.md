@@ -291,6 +291,19 @@ the macOS bundle is unchanged.
 Launch Slicer Router directly to see the installed slicers, pick the slicer for
 files with no origin, and see whether it is the default app.
 
+## Developing the window
+
+The window is plain HTML, CSS and JavaScript in `app/ui`, with no build step.
+To work on it without building the app, serve `app` and open
+`/ui-preview/index.html`. It loads the shipped markup, styles and script in a
+480 by 600 frame against fixture states (files waiting, failures, not the
+default app and others) that `app/ui-preview/fake-tauri.js` stands in for. The
+preview is outside `frontendDist`, so it is never bundled.
+
+```sh
+python3 -m http.server 8000 --directory app   # then open http://127.0.0.1:8000/ui-preview/index.html
+```
+
 ## CLI
 
 ```sh
