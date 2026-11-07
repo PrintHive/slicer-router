@@ -198,6 +198,10 @@ records the installed slicers for the thumbnails. An ad hoc signed build may nee
 right-click, Open the first time. Thumbnails have been verified only with a
 Developer ID signed build (below).
 
+The app icon comes from `app/icon/generate.py`, which writes the two SVG masters
+and every PNG, `.icns` and `.ico` under `app/src-tauri/icons`. Edit the script,
+not the generated files. It needs `rsvg-convert` (`brew install librsvg`).
+
 `cargo tauri build --bundles app` alone still builds the app, without the
 thumbnail extension.
 
