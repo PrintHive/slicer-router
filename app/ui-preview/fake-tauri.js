@@ -86,6 +86,11 @@
         pending: [{ detected: null, detected_name: null, files: NO_INFO }],
         failures: [failure(PRUSA[0], "prusa-slicer", didNotStart("prusa-slicer"))],
       }),
+    "missing-default": () =>
+      base({ installed: installedOf(ALL.filter((id) => id !== "prusa-slicer")) }),
+    "missing-ask": () =>
+      base({ installed: installedOf(ALL.filter((id) => id !== "prusa-slicer")), default_slicer: null }),
+    "single-slicer": () => base({ installed: installedOf(["orca-slicer"]), default_slicer: null }),
     empty: () => base({ installed: [], default_slicer: null }),
     "no-slicer": () =>
       base({

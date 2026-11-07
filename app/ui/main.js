@@ -252,6 +252,16 @@ function slicerTiles(data) {
   return group;
 }
 
+// What a file does when its own slicer is not installed and no override applies,
+// the way route() in the core crate decides: the default slicer, else a lone
+// installed slicer, else the person is asked.
+function unplacedLabel(data) {
+  const fallback = data.installed.find((slicer) => slicer.id === data.default_slicer);
+  if (fallback) return `Default (${fallback.name})`;
+  if (data.installed.length === 1) return `Only installed (${data.installed[0].name})`;
+  return "Ask me";
+}
+
 function overrides(data) {
   const installed = new Set(data.installed.map((slicer) => slicer.id));
   const rows = OVERRIDE_KINDS.map((kind) => {
@@ -267,7 +277,7 @@ function overrides(data) {
       h(
         "select",
         { id, "data-key": id, onchange: (event) => setOverride(kind, event.target.value || null) },
-        !installed.has(kind.detected) && h("option", { value: "", selected: current === "" }, "Ask me"),
+        !installed.has(kind.detected) && h("option", { value: "", selected: current === "" }, unplacedLabel(data)),
         ...data.installed.map((slicer) =>
           h(
             "option",
@@ -389,7 +399,7 @@ async function chooseDefault(slicer) {
 async function setOverride(kind, slicerId) {
   if (!(await command("set_override", { detected: kind.detected, slicer: slicerId }))) return;
   await refresh();
-  toast(`Saved · ${kind.label} → ${slicerId ? slicerName(slicerId) : "ask me"}`);
+  toast(`Saved · ${kind.label} → ${slicerId ? slicerName(slicerId) : unplacedLabel(ui.data)}`);
 }
 
 async function makeDefault() {
