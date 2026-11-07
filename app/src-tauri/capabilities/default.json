@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Lets the settings window call the app's own commands.",
+  "windows": ["settings"],
+  "permissions": ["core:default"]
+}
