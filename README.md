@@ -144,18 +144,23 @@ It never shows more than one sheet at a time.
   tile is the slicer for files with no slicer info.
 - **Overrides.** "Send detected files somewhere else" has a menu per kind of
   project (Bambu, Snapmaker, Prusa, OrcaSlicer). Choosing the detected slicer
-  itself removes the override.
+  itself removes the override. When that slicer is not installed, the empty
+  choice says what routing does instead: the default slicer, the only installed
+  slicer, or ask.
 - **Questions.** Files that wait for a choice (see
   [Choosing the installed slicer](#choosing-the-installed-slicer)) drop a sheet
   from the top of the window, one group at a time. Esc, a click outside it, or
-  Later closes it and leaves the files waiting, with a Choose button to bring it
-  back. Waiting files live in memory, so they are forgotten when the app quits.
+  Later closes it and leaves that group waiting, with a Choose button to bring it
+  back. A group that arrives afterwards opens its own sheet. Waiting files live
+  in memory, so they are forgotten when the app quits.
 - **Failures.** A file that did not open (no slicer installed, a version of
   Slicer Router that cannot route it, or a launch that failed) gets a red sheet
   that lists up to three file names with a reason. It offers the installed
   slicers that did not fail to open every failed file once, without changing the
   config, and "Try again" for the slicers that still exist. A slicer whose app
-  was moved or deleted cannot be retried. Failures stay until dismissed.
+  was moved or deleted, or a file that was, cannot be retried. Each button acts
+  only on the files the sheet listed. Failures stay until dismissed, and the app
+  quits once the last one is, unless you opened the window yourself.
 - **Default app.** The window says whether Slicer Router opens `.3mf` files and,
   when it does not, which app does. See
   [Make Slicer Router the default .3mf app](#make-slicer-router-the-default-3mf-app).
@@ -273,7 +278,10 @@ once before macOS knows it.
 "Reveal a .3mf in Explorer". It selects a small example `.3mf` in the temp folder.
 Right-click it, choose Open with, Choose another app, pick Slicer Router, then
 Always. Or: Settings, Apps, Default apps, search for `.3mf`, choose Slicer Router.
-The window reads the choice from `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.3mf\UserChoice`.
+The window reads the choice from `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.3mf\UserChoiceLatest`,
+falling back to `UserChoice`. Picking Slicer Router from the Open with list
+records `Applications\slicer-router-app.exe` instead of the installer's file class,
+and the window counts that as Slicer Router too.
 
 Then turn off "Associate .3mf files" in the preferences of Bambu Studio,
 OrcaSlicer, Snapmaker Orca and PrusaSlicer (the label varies a little). Each of
@@ -353,7 +361,7 @@ PrusaSlicer files.
 Not yet run on Windows. The core crate type-checks and passes clippy for
 `x86_64-pc-windows-msvc`, and the CI workflow runs the tests there, but registry
 discovery, the Tauri app, the NSIS file association, the default-app status read
-from `UserChoice` and the Explorer reveal have not been exercised on a Windows
+from `UserChoiceLatest` and `UserChoice`, and the Explorer reveal have not been exercised on a Windows
 machine.
 
 ## License
