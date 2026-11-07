@@ -363,6 +363,7 @@ dependencies = [
  "clap",
  "serde_json",
  "slicer-router-core",
+ "tempfile",
 ]
 
 [[package]]
