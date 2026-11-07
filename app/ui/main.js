@@ -294,7 +294,7 @@ function overrides(data) {
   const details = h(
     "details",
     { class: "adv", open: ui.overridesOpen },
-    h("summary", {}, "Send detected files somewhere else"),
+    h("summary", { "data-key": "overrides-summary" }, "Send detected files somewhere else"),
     h("div", { class: "ovr" }, ...rows),
     h("p", { class: "fine" }, "Most people never change these."),
   );
@@ -537,12 +537,17 @@ function dismissSheet() {
 // A toast that says files are opening would contradict a failure sheet.
 const failureShowing = () => ui.sheet?.kind === "failure";
 
-function focusSelectedTile() {
+// Where focus goes when a sheet closes and the person did not pick a tile: the
+// selected tile, or the overrides summary. Never an unselected tile, which a
+// second Enter would silently make the default.
+function focusAfterSheet() {
   if (ui.sheet) return;
-  (view.querySelector('.tile[aria-checked="true"]') ?? view.querySelector(".tile"))?.focus({
+  (view.querySelector('.tile[aria-checked="true"]') ?? overridesSummary())?.focus({
     preventScroll: true,
   });
 }
+
+const overridesSummary = () => view.querySelector('[data-key="overrides-summary"]');
 
 function questionSheet(group) {
   const count = group.files.length;
@@ -635,17 +640,19 @@ async function answerQuestion(group, slicerId) {
   const opened = await leaveSheet(() => command("choose", { detected: group.detected, slicer: slicerId }));
   if (!opened) return;
   if (!failureShowing()) toast(`Opening ${files(count)} in ${slicerName(slicerId)}`);
-  landOnTile(slicerId, group.detected === null);
+  if (group.detected === null) landOnTile(slicerId);
+  else if (!ui.sheet) overridesSummary()?.focus({ preventScroll: true });
 }
 
-// Focus the tile the person chose. A pick for files with no slicer info becomes
-// the default, so that tile pulses once; a pick for a missing slicer is an
-// override, which no tile shows.
-function landOnTile(slicerId, pulse) {
+// A pick for files with no slicer info becomes the default: focus the tile and
+// pulse it once. A pick for a missing slicer is an override, which no tile shows,
+// so focus goes to the overrides instead of a tile that Enter would then make
+// the default.
+function landOnTile(slicerId) {
   const landed = view.querySelector(`[data-key="slicer:${CSS.escape(slicerId)}"]`);
   if (!landed) return;
   if (!ui.sheet) landed.focus({ preventScroll: true });
-  if (pulse) landed.classList.add("landed");
+  landed.classList.add("landed");
 }
 
 async function deferQuestion() {
@@ -664,7 +671,7 @@ function reopenQuestion() {
 async function dismissFailures() {
   const { files } = ui.sheet;
   await leaveSheet(() => command("dismiss_failures", { files }));
-  focusSelectedTile();
+  focusAfterSheet();
 }
 
 async function retryFailures() {
@@ -673,7 +680,7 @@ async function retryFailures() {
   const retrying = ui.data.failures.filter((failure) => failure.retryable && shown.includes(failure.file));
   const names = unique(retrying.map((failure) => failure.slicer_name));
   const retried = await leaveSheet(() => command("retry_failures", { files: shown }));
-  focusSelectedTile();
+  focusAfterSheet();
   if (retried && !failureShowing()) toast(`Trying ${files(retrying.length)} again in ${names.join(" and ")}`);
 }
 
@@ -682,7 +689,7 @@ async function openElsewhere(slicerId) {
   const { files: shown } = ui.sheet;
   const count = shown.length;
   const opened = await leaveSheet(() => command("open_failures_in", { files: shown, slicer: slicerId }));
-  focusSelectedTile();
+  focusAfterSheet();
   if (opened && !failureShowing()) toast(`Opening ${files(count)} in ${slicerName(slicerId)}`);
 }
 
