@@ -101,8 +101,14 @@ replaces such a file.
   the shortest bundle name wins. Slicers are launched with `open -a <their .app>`,
   so the router never relaunches itself.
 - **Windows.** The `App Paths` and `Uninstall` registry keys, then the usual
-  `Program Files` folders. Slicers are started by running their executable with
-  the file as the argument.
+  `Program Files` folders. A path from the registry must be an `.exe` or a
+  folder holding one, and `%VARIABLES%` in registry values are expanded. Slicers
+  are started by running their executable with the file as the argument.
+
+The file path is made absolute before launch. On macOS the router waits for
+`open` to hand the file over, so a broken app bundle is reported as an error. On
+Windows it returns as soon as the slicer process exists and does not see a later
+failure inside the slicer.
 - **Linux.** Not supported yet. The library compiles but finds nothing.
 
 ## Install

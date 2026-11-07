@@ -45,7 +45,7 @@ pub fn discover_installed() -> Vec<InstalledSlicer> {
         dirs.extend(home.map(|home| home.join("Applications")));
         scan_mac_apps(&dirs)
     } else if cfg!(windows) {
-        discover_windows(|name| std::env::var_os(name))
+        discover_windows(|name| std::env::var_os(name), registry_paths)
     } else {
         Vec::new()
     }
@@ -160,14 +160,25 @@ fn best_per_slicer(mut found: Vec<InstalledSlicer>) -> Vec<InstalledSlicer> {
         .collect()
 }
 
-/// Find slicers on Windows from `env` (for `Program Files`), the registry and disk.
-fn discover_windows(env: impl Fn(&str) -> Option<OsString>) -> Vec<InstalledSlicer> {
+/// Find slicers on Windows from the registry and the usual install folders.
+///
+/// `env` supplies `Program Files` and the variables inside registry values.
+/// `registry` returns the raw strings the registry holds for one slicer, each
+/// an executable or an install folder. Taking it as a parameter keeps tests off
+/// the real registry.
+fn discover_windows(
+    env: impl Fn(&str) -> Option<OsString>,
+    registry: impl Fn(&SlicerSpec) -> Vec<String>,
+) -> Vec<InstalledSlicer> {
     let roots = program_roots(&env);
     let found = Slicer::ALL
         .iter()
         .filter_map(|&slicer| {
             let spec = slicer.spec();
-            let mut candidates = registry_candidates(spec);
+            let mut candidates: Vec<PathBuf> = registry(spec)
+                .iter()
+                .map(|raw| PathBuf::from(expand_env_vars(raw.trim().trim_matches('"'), &env)))
+                .collect();
             candidates.extend(program_dirs(spec, &roots));
             find_exe(&candidates, spec.windows.exe_names)
                 .map(|path| InstalledSlicer { slicer, path })
@@ -200,12 +211,36 @@ fn program_dirs(spec: &SlicerSpec, roots: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The first executable among `candidates`. A candidate that is a file is the
-/// executable itself; a folder is searched for each of `exe_names`.
+/// Replace each `%NAME%` with the variable's value, as Windows does for the
+/// `REG_EXPAND_SZ` values that `App Paths` entries often are. A variable that is
+/// not set is left as written.
+fn expand_env_vars(text: &str, env: &impl Fn(&str) -> Option<OsString>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('%') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('%') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let name = &after[..close];
+        match env(name).filter(|_| !name.is_empty()) {
+            Some(value) => out.push_str(&value.to_string_lossy()),
+            None => out.extend(["%", name, "%"]),
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The first executable among `candidates`. A candidate that is a file counts
+/// only if it is an `.exe`; a folder is searched for each of `exe_names`.
 fn find_exe(candidates: &[PathBuf], exe_names: &[&str]) -> Option<PathBuf> {
     candidates.iter().find_map(|candidate| {
         if candidate.is_file() {
-            return Some(candidate.clone());
+            return is_exe(candidate).then(|| candidate.clone());
         }
         exe_names
             .iter()
@@ -214,9 +249,15 @@ fn find_exe(candidates: &[PathBuf], exe_names: &[&str]) -> Option<PathBuf> {
     })
 }
 
-/// Executables and install folders that the Windows registry records for `spec`.
+fn is_exe(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+}
+
+/// Executables and install folders that the Windows registry records for `spec`,
+/// exactly as stored: quotes and `%VARIABLES%` are still in the strings.
 #[cfg(windows)]
-fn registry_candidates(spec: &SlicerSpec) -> Vec<PathBuf> {
+fn registry_paths(spec: &SlicerSpec) -> Vec<String> {
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::RegKey;
 
@@ -232,7 +273,7 @@ fn registry_candidates(spec: &SlicerSpec) -> Vec<PathBuf> {
         for exe in spec.windows.exe_names {
             let key = hive.open_subkey_with_flags(format!(r"{APP_PATHS}\{exe}"), KEY_READ);
             if let Ok(path) = key.and_then(|key| key.get_value::<String, _>("")) {
-                candidates.push(PathBuf::from(path.trim_matches('"')));
+                candidates.push(path);
             }
         }
         for uninstall in UNINSTALL {
@@ -250,7 +291,7 @@ fn registry_candidates(spec: &SlicerSpec) -> Vec<PathBuf> {
                     .iter()
                     .any(|prefix| display.to_lowercase().starts_with(&prefix.to_lowercase()));
                 if let (true, Ok(dir)) = (matches, app.get_value::<String, _>("InstallLocation")) {
-                    candidates.push(PathBuf::from(dir.trim_matches('"')));
+                    candidates.push(dir);
                 }
             }
         }
@@ -259,7 +300,7 @@ fn registry_candidates(spec: &SlicerSpec) -> Vec<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn registry_candidates(_spec: &SlicerSpec) -> Vec<PathBuf> {
+fn registry_paths(_spec: &SlicerSpec) -> Vec<String> {
     Vec::new()
 }
 
@@ -347,7 +388,10 @@ mod tests {
         fs::create_dir_all(pf.join("Bambu Studio")).unwrap();
 
         let pf_value: OsString = pf.clone().into();
-        let found = discover_windows(|name| (name == "ProgramFiles").then(|| pf_value.clone()));
+        let found = discover_windows(
+            |name| (name == "ProgramFiles").then(|| pf_value.clone()),
+            |_| Vec::new(),
+        );
         assert_eq!(
             found,
             [
@@ -366,11 +410,73 @@ mod tests {
     #[test]
     fn a_registry_candidate_that_is_a_file_is_the_executable() {
         let dir = TempDir::new().unwrap();
-        let exe = dir.path().join("custom-name.exe");
-        fs::write(&exe, b"").unwrap();
+        for name in ["custom-name.exe", "Custom-Name.EXE"] {
+            let exe = dir.path().join(name);
+            fs::write(&exe, b"").unwrap();
+            assert_eq!(
+                find_exe(std::slice::from_ref(&exe), &["bambu-studio.exe"]),
+                Some(exe)
+            );
+        }
+    }
+
+    #[test]
+    fn a_registry_candidate_that_is_not_an_exe_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        for name in ["readme.txt", "uninstall.lnk", "no-extension"] {
+            let file = dir.path().join(name);
+            fs::write(&file, b"").unwrap();
+            assert_eq!(find_exe(&[file], &["bambu-studio.exe"]), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn variables_in_registry_values_are_expanded() {
+        let env = |name: &str| match name {
+            "ProgramFiles" => Some(OsString::from("C:/Program Files")),
+            "EMPTY" => Some(OsString::new()),
+            _ => None,
+        };
+        let expand = |text: &str| expand_env_vars(text, &env);
         assert_eq!(
-            find_exe(std::slice::from_ref(&exe), &["bambu-studio.exe"]),
-            Some(exe)
+            expand("%ProgramFiles%/Orca/orca-slicer.exe"),
+            "C:/Program Files/Orca/orca-slicer.exe"
+        );
+        assert_eq!(expand("a%EMPTY%b"), "ab");
+        assert_eq!(
+            expand("%MISSING%/x"),
+            "%MISSING%/x",
+            "unset stays as written"
+        );
+        assert_eq!(expand("100%"), "100%", "an unclosed percent sign is text");
+        assert_eq!(expand("a%%b"), "a%%b");
+        assert_eq!(expand("plain"), "plain");
+    }
+
+    #[test]
+    fn a_quoted_registry_value_with_a_variable_finds_the_executable() {
+        let dir = TempDir::new().unwrap();
+        let install = dir.path().join("Custom Install");
+        fs::create_dir_all(&install).unwrap();
+        fs::write(install.join("bambu-gui.exe"), b"").unwrap();
+        let root: OsString = dir.path().into();
+
+        let found = discover_windows(
+            |name| (name == "ProgramFiles").then(|| root.clone()),
+            |spec| {
+                if spec.id == "bambu-studio" {
+                    vec!["\"%ProgramFiles%/Custom Install/bambu-gui.exe\"".to_owned()]
+                } else {
+                    Vec::new()
+                }
+            },
+        );
+        assert_eq!(
+            found,
+            [InstalledSlicer::new(
+                Slicer::BambuStudio,
+                install.join("bambu-gui.exe")
+            )]
         );
     }
 }
