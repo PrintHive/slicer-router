@@ -22,13 +22,17 @@ model geometry, so a 100 MB file costs the same as a small one:
 - `Metadata/Slic3r_PE.config` (PrusaSlicer), only the printer fields.
 
 Rules run in this order and the first one that names a slicer wins. The
-printer a project was prepared for outranks the program that saved it.
+printer a project was prepared for outranks the program that saved it. Within
+the printer rule, the printer model is checked first, then the preset name, then
+the vendor, so a preset called `MK4S for Bambu filament` still goes to
+PrusaSlicer. Within one field, slicers are tried in the order Bambu Studio,
+Snapmaker Orca, PrusaSlicer.
 
 | # | Rule name in `--json` | Fires when | Slicer |
 | --- | --- | --- | --- |
-| 1 | `printer-profile` | Printer model, preset name or vendor contains `Snapmaker` | Snapmaker Orca |
-| 1 | `printer-profile` | ... contains `Bambu` | Bambu Studio |
-| 1 | `printer-profile` | ... contains `Prusa`, has the `PRINTER_VENDOR_PRUSA3D` marker, or the model is exactly `MK3`, `MK3S`, `MK3.5`, `MK4`, `MK4S`, `MINI`, `XL`, `CORE One` and similar | PrusaSlicer |
+| 1a | `printer-profile` | Printer model contains `Bambu`, `Snapmaker` or `Prusa`, or is exactly `MK3`, `MK3S`, `MK3.5`, `MK4`, `MK4S`, `MINI`, `XL`, `CORE One` or another Prusa model name | Bambu Studio, Snapmaker Orca or PrusaSlicer |
+| 1b | `printer-profile` | No model matched, and the preset name (`printer_settings_id`) contains `Bambu`, `Snapmaker` or `Prusa` | Bambu Studio, Snapmaker Orca or PrusaSlicer |
+| 1c | `printer-profile` | Neither matched, and the vendor contains `Bambu`, `Snapmaker` or `Prusa`. PrusaSlicer's `PRINTER_VENDOR_PRUSA3D` marker counts as the vendor | Bambu Studio, Snapmaker Orca or PrusaSlicer |
 | 2 | `application-name` | `Application` is `BambuStudio-` followed by four numeric parts (for example `02.08.02.61` or `02.10.00.100`) | Bambu Studio |
 | 2 | `application-bambu-fork` | `Application` is `BambuStudio-` followed by anything else (for example `BambuStudio-2.3.1`) | OrcaSlicer |
 | 2 | `application-name` | `Application` starts with `OrcaSlicer-` | OrcaSlicer |

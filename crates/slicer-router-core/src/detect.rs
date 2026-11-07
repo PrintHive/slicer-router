@@ -77,25 +77,29 @@ impl Verdict {
     }
 }
 
+/// Printer fields are tried most specific first: the model, then the preset name,
+/// then the vendor. A preset name is free text that people extend with other
+/// brands ("MK4S for Bambu filament"), so it must not outvote the model.
 fn by_printer_profile(evidence: &Evidence) -> Option<(Slicer, Rule)> {
     let printer = &evidence.printer;
-    let names: Vec<String> = [&printer.model, &printer.settings_id, &printer.vendor]
-        .into_iter()
-        .flatten()
-        .map(|name| name.to_ascii_lowercase())
-        .collect();
-    let model = printer.model.as_deref().map(str::to_ascii_lowercase);
-    Slicer::ALL
-        .into_iter()
-        .find(|slicer| {
-            let patterns = &slicer.spec().printers;
-            patterns
-                .name_contains
-                .iter()
-                .any(|needle| names.iter().any(|name| name.contains(needle)))
-                || model
-                    .as_deref()
-                    .is_some_and(|model| patterns.exact_models.contains(&model))
+    let lower = |field: &Option<String>| field.as_deref().map(str::to_ascii_lowercase);
+    let tiers = [
+        (lower(&printer.model), true),
+        (lower(&printer.settings_id), false),
+        (lower(&printer.vendor), false),
+    ];
+    tiers
+        .iter()
+        .filter_map(|(name, is_model)| Some((name.as_deref()?, *is_model)))
+        .find_map(|(name, is_model)| {
+            Slicer::ALL.iter().copied().find(|slicer| {
+                let patterns = &slicer.spec().printers;
+                patterns
+                    .name_contains
+                    .iter()
+                    .any(|needle| name.contains(needle))
+                    || (is_model && patterns.exact_models.contains(&name))
+            })
         })
         .map(|slicer| (slicer, Rule::PrinterProfile))
 }

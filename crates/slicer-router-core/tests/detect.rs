@@ -343,6 +343,35 @@ fn printer_names_attribute_to_the_right_vendor() {
     }
 }
 
+fn printer_verdict(model: &str, settings_id: &str, vendor: &str) -> Verdict {
+    let field = |value: &str| (!value.is_empty()).then(|| value.to_owned());
+    let mut evidence = Evidence::default();
+    evidence.printer.model = field(model);
+    evidence.printer.settings_id = field(settings_id);
+    evidence.printer.vendor = field(vendor);
+    classify(evidence)
+}
+
+#[test]
+fn another_brand_in_the_preset_name_does_not_outvote_the_printer_model() {
+    let snapmaker = printer_verdict("Snapmaker U1", "Snapmaker U1 - Bambu PLA tuned", "");
+    assert_verdict(
+        &snapmaker,
+        Some(Slicer::SnapmakerOrca),
+        Rule::PrinterProfile,
+    );
+    let prusa = printer_verdict("MK4S", "MK4S for Bambu filament", "");
+    assert_verdict(&prusa, Some(Slicer::PrusaSlicer), Rule::PrinterProfile);
+}
+
+#[test]
+fn preset_name_outranks_vendor_and_vendor_decides_last() {
+    let preset = printer_verdict("", "Bambu Lab P1S 0.4 nozzle", "PRUSA3D");
+    assert_verdict(&preset, Some(Slicer::BambuStudio), Rule::PrinterProfile);
+    let vendor = printer_verdict("Custom", "garage printer", "PRUSA3D");
+    assert_verdict(&vendor, Some(Slicer::PrusaSlicer), Rule::PrinterProfile);
+}
+
 #[test]
 fn verdict_serializes_with_kebab_case_names() {
     let verdict = detect_fixture(ThreeMf::new().model(Some("BambuStudio-2.3.1")));
