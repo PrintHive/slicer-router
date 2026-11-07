@@ -4,62 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Slicer Router</title>
-  <style>
-    :root { color-scheme: light dark; font: 14px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif; }
-    body { margin: 0; padding: 20px 22px 24px; }
-    h1 { font-size: 18px; margin: 0 0 2px; }
-    h2 { font-size: 13px; margin: 22px 0 6px; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
-    p { margin: 0 0 8px; }
-    .muted { opacity: .7; }
-    .banner { border-radius: 8px; padding: 10px 12px; margin: 14px 0 0; background: rgba(255, 170, 0, .18); }
-    .banner.error { background: rgba(220, 50, 50, .18); }
-    #notice-text { white-space: pre-line; word-break: break-all; }
-    .banner ul { margin: 6px 0 0; padding-left: 18px; word-break: break-all; }
-    .banner .choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-    .banner .note { margin: 8px 0 0; }
-    button { font: inherit; padding: 4px 12px; }
-    label.slicer { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
-    label.slicer:hover { background: rgba(127, 127, 127, .12); }
-    label.slicer small { display: block; opacity: .6; word-break: break-all; }
-    code { font: 12px ui-monospace, Menlo, Consolas, monospace; }
-    ol { margin: 6px 0 0; padding-left: 20px; }
-    li { margin: 3px 0; }
-    #hint-mac, #hint-windows { display: none; }
-    #status { min-height: 1.4em; margin-top: 10px; }
-  </style>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Slicer Router</h1>
-  <p class="muted">Opens each .3mf in the slicer that made it.</p>
-
-  <div id="pending"></div>
-  <div id="notice" class="banner error" hidden>
-    <span id="notice-text"></span>
-    <p class="note"><button id="dismiss">Dismiss</button></p>
-  </div>
-
-  <h2>Slicer for files with no origin</h2>
-  <div id="slicers"></div>
-  <p id="none" class="muted" hidden>No supported slicer found. Install Bambu Studio, OrcaSlicer, Snapmaker Orca or PrusaSlicer.</p>
-  <div id="status" class="muted"></div>
-
-  <h2>Make Slicer Router the default .3mf app</h2>
-  <div id="hint-mac">
-    <ol>
-      <li>In Finder, select any <code>.3mf</code> file and press <code>Cmd+I</code>.</li>
-      <li>Under <strong>Open with</strong>, choose <strong>Slicer Router</strong>.</li>
-      <li>Click <strong>Change All&hellip;</strong>.</li>
-    </ol>
-  </div>
-  <div id="hint-windows">
-    <ol>
-      <li>Open <strong>Settings &gt; Apps &gt; Default apps</strong>.</li>
-      <li>Search for <code>.3mf</code>.</li>
-      <li>Choose <strong>Slicer Router</strong>.</li>
-      <li>In each slicer's preferences, turn off <strong>Associate .3mf files</strong>. Otherwise it takes .3mf back the next time it starts.</li>
-    </ol>
-  </div>
-
+  <main id="view"></main>
+  <div id="layer"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
   <script src="main.js"></script>
 </body>
 </html>
