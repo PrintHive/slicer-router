@@ -40,8 +40,6 @@ def icon(src_r, src_w, dst_r, dst_w, branch_w, spread, dim):
 
 
 here = Path(__file__).parent
-(here / "icon.svg").write_text(icon(src_r=118, src_w=38, dst_r=76, dst_w=28, branch_w=30, spread=222, dim=0.42))
-(here / "icon-small.svg").write_text(icon(src_r=130, src_w=72, dst_r=96, dst_w=56, branch_w=60, spread=238, dim=0.5))
 
 
 def render(svg, size, out):
@@ -70,14 +68,21 @@ def write_ico(sizes, out):
     out.write_bytes(header + entries + data)
 
 
-icons = here.parent / "src-tauri" / "icons"
-for name, size in (("32x32.png", 32), ("128x128.png", 128), ("128x128@2x.png", 256), ("icon.png", 512)):
-    render(master(size), size, icons / name)
-with tempfile.TemporaryDirectory() as tmp:
-    iconset = Path(tmp) / "icon.iconset"
-    iconset.mkdir()
-    for size in (16, 32, 128, 256, 512):
-        render(master(size), size, iconset / f"icon_{size}x{size}.png")
-        render(master(size * 2), size * 2, iconset / f"icon_{size}x{size}@2x.png")
-    subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(icons / "icon.icns")], check=True)
-write_ico((16, 24, 32, 48, 64, 128, 256), icons / "icon.ico")
+def main():
+    (here / "icon.svg").write_text(icon(src_r=118, src_w=38, dst_r=76, dst_w=28, branch_w=30, spread=222, dim=0.42))
+    (here / "icon-small.svg").write_text(icon(src_r=130, src_w=72, dst_r=96, dst_w=56, branch_w=60, spread=238, dim=0.5))
+    icons = here.parent / "src-tauri" / "icons"
+    for name, size in (("32x32.png", 32), ("128x128.png", 128), ("128x128@2x.png", 256), ("icon.png", 512)):
+        render(master(size), size, icons / name)
+    with tempfile.TemporaryDirectory() as tmp:
+        iconset = Path(tmp) / "icon.iconset"
+        iconset.mkdir()
+        for size in (16, 32, 128, 256, 512):
+            render(master(size), size, iconset / f"icon_{size}x{size}.png")
+            render(master(size * 2), size * 2, iconset / f"icon_{size}x{size}@2x.png")
+        subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(icons / "icon.icns")], check=True)
+    write_ico((16, 24, 32, 48, 64, 128, 256), icons / "icon.ico")
+
+
+if __name__ == "__main__":
+    main()
