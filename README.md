@@ -41,10 +41,11 @@ Snapmaker Orca, PrusaSlicer.
 | 3 | `prusa-config-file` | The archive has `Slic3r_PE.config` and nothing above matched | PrusaSlicer |
 | - | `no-signal` | Nothing matched, for example a plain Printables or Thingiverse download | none, so your default slicer opens it |
 
-Why the `BambuStudio-` tag needs two rows: OrcaSlicer 2.3 and Snapmaker Orca 2.2
-write `BambuStudio-<their own version>` as the application so that Bambu Studio
-accepts their files. Their versions have three parts. Bambu Studio's own
-releases have four. Newer Snapmaker Orca builds write `Snapmaker_Orca-`.
+Why the `BambuStudio-` tag needs two rows: OrcaSlicer 2.3.1 and Snapmaker Orca
+up to 2.3.1 write `BambuStudio-<their own version>` as the application so that
+Bambu Studio accepts their files. Their versions have three parts. Bambu
+Studio's own releases have four. Snapmaker Orca 2.4.0 writes `Snapmaker_Orca-`
+instead.
 
 A project with no matching printer and an `OrcaSlicer-` tag opens in OrcaSlicer.
 A Bambu Lab P1S project saved by OrcaSlicer opens in Bambu Studio, because the
@@ -126,8 +127,8 @@ and no window to take back.
 
 ## Install
 
-There are no prebuilt releases yet. Build from source with a current stable Rust
-toolchain.
+There are no prebuilt releases yet. Build from source. The core and CLI crates
+need Rust 1.88 or newer. The app needs 1.90 or newer, because Tauri 2 does.
 
 ```sh
 # CLI
@@ -135,12 +136,23 @@ cargo install --path crates/slicer-router-cli
 
 # App (needs the Tauri CLI once: cargo install tauri-cli --version "^2" --locked)
 cd app/src-tauri
-cargo tauri build --bundles app    # macOS, produces target/release/bundle/macos/Slicer Router.app
-cargo tauri build --bundles nsis   # Windows, produces an installer under target/release/bundle/nsis/
+cargo tauri build --bundles app    # macOS
+cargo tauri build --bundles nsis   # Windows
 ```
+
+The output lands in the workspace's `target` folder at the repository root, not
+under `app/src-tauri`: `target/release/bundle/macos/Slicer Router.app` on macOS
+and `target/release/bundle/nsis/*.exe` on Windows.
 
 On macOS copy `Slicer Router.app` to `/Applications`. The build is ad-hoc signed,
 so the first launch may need right-click, Open.
+
+The crates are not published to crates.io (`publish = false`). Depend on the core
+crate as a git dependency, pinned to a release tag:
+
+```toml
+slicer-router-core = { git = "https://github.com/PrintHive/slicer-router", tag = "<release tag>" }
+```
 
 ## Make Slicer Router the default .3mf app
 

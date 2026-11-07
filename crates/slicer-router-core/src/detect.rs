@@ -135,8 +135,9 @@ impl Release {
 
 /// `Application` metadata values, in match order.
 ///
-/// OrcaSlicer 2.3 and Snapmaker Orca 2.2 write `BambuStudio-<their own version>`,
-/// a three-part number, which is why the Bambu prefix has two rows. Bambu
+/// OrcaSlicer 2.3.1 and Snapmaker Orca up to 2.3.1 write
+/// `BambuStudio-<their own version>`, a three-part number, which is why the Bambu
+/// prefix has two rows. Snapmaker Orca 2.4.0 writes `Snapmaker_Orca-`. Bambu
 /// Studio's own releases have four numeric parts, and a part may outgrow two
 /// digits (`02.10.00.100`).
 const APPLICATION_SIGNATURES: &[(&str, Release, Slicer, Rule)] = &[

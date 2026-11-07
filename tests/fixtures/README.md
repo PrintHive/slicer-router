@@ -19,4 +19,9 @@ two project files above or from the in-code builder.
 
 The first two rows show why the `Application` tag alone cannot separate Bambu
 Studio from OrcaSlicer: OrcaSlicer writes `BambuStudio-` plus its own three-part
-version.
+version. The Snapmaker Orca rows show the same trap and its end: 2.2.4 writes
+`BambuStudio-2.2.4`, and 2.4.0 writes `Snapmaker_Orca-2.4.0`.
+
+The PrusaSlicer file's model `Title` and `Description` read `prusa-generic`, where
+the other CLI exports leave them empty. Detection reads only `Application` and the
+printer fields, so those two do not matter.
