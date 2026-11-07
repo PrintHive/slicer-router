@@ -15,13 +15,14 @@ mod plan;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use pending::PendingFile;
 use plan::{launch_all, plan, startup, Plan, Startup};
 use serde::Serialize;
-use slicer_router_core::{discover_installed, launch, Config, InstalledSlicer, Slicer};
+use slicer_router_core::{discover_installed, launch, Config, InstalledSlicer, Slicer, Snapshot};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
 
 const SETTINGS_WINDOW: &str = "settings";
@@ -95,12 +96,10 @@ fn pending_view(pending: &[PendingFile]) -> Vec<PendingGroupView> {
 fn main() {
     let cwd = std::env::current_dir().unwrap_or_default();
     let files = files_from_args(std::env::args_os(), &cwd);
-    let started = startup(
-        &files,
-        &discover_installed(),
-        &load_config_or_default(),
-        launch_file,
-    );
+    let installed = discover_installed();
+    let config = load_config_or_default();
+    let started = startup(&files, &installed, &config, launch_file);
+    refresh_thumbnails(installed, &config);
     match started {
         Startup::Done => {}
         Startup::Failed(notice) => run_app(Some(notice)),
@@ -110,6 +109,32 @@ fn main() {
 
 fn launch_file(slicer: &InstalledSlicer, file: &Path) -> Result<(), String> {
     launch(slicer, file).map_err(|err| err.to_string())
+}
+
+/// Save what the Finder thumbnail extension needs to badge each `.3mf` with the
+/// slicer that will open it. Finder keeps showing cached thumbnails after the
+/// routing changes, so a change also resets the Quick Look thumbnail cache.
+fn refresh_thumbnails(installed: Vec<InstalledSlicer>, config: &Config) {
+    let Some(dir) = Snapshot::default_dir() else {
+        return;
+    };
+    match Snapshot::new(installed, config).save(&dir) {
+        Ok(false) => {}
+        Ok(true) => {
+            let reset = Command::new("/usr/bin/qlmanage")
+                .args(["-r", "cache"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            if let Err(err) = reset {
+                eprintln!("slicer-router: cannot reset the Quick Look cache: {err}");
+            }
+        }
+        Err(err) => eprintln!(
+            "slicer-router: cannot save the thumbnail snapshot in {}: {err}",
+            dir.display()
+        ),
+    }
 }
 
 /// Run the Tauri app. `failure` is set when the files already launched and only
@@ -332,6 +357,7 @@ fn choose(
         let released = pending::resolve(&path, &mut pending, detected, slicer)?;
         (released, pending.is_empty())
     };
+    refresh_thumbnails(installed.clone(), &load_config_or_default());
     let failures: Vec<String> = released
         .iter()
         .filter_map(|file| launch_file(target, file).err())
