@@ -4,12 +4,14 @@ members = [
     "crates/slicer-router-core",
     "crates/slicer-router-cli",
     "crates/slicer-router-ffi",
+    "crates/slicer-router-macos",
     "app/src-tauri",
 ]
 default-members = [
     "crates/slicer-router-core",
     "crates/slicer-router-cli",
     "crates/slicer-router-ffi",
+    "crates/slicer-router-macos",
 ]
 
 [workspace.package]

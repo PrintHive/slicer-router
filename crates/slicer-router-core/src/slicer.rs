@@ -169,6 +169,19 @@ impl Slicer {
     pub fn display_name(self) -> &'static str {
         self.spec().display_name
     }
+
+    /// The slicer whose macOS app has this `CFBundleIdentifier`, compared after
+    /// trimming whitespace and trailing slashes and ignoring case.
+    pub fn from_mac_bundle_id(bundle_id: &str) -> Option<Slicer> {
+        let id = bundle_id.trim().trim_end_matches('/');
+        Slicer::ALL.iter().copied().find(|slicer| {
+            slicer
+                .spec()
+                .mac_bundle_ids
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(id))
+        })
+    }
 }
 
 impl fmt::Display for Slicer {
@@ -215,6 +228,19 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), 4);
+    }
+
+    #[test]
+    fn bundle_ids_find_their_slicer_ignoring_case_and_a_trailing_slash() {
+        assert_eq!(
+            Slicer::from_mac_bundle_id(" com.Prusa3D.slic3r/ "),
+            Some(Slicer::PrusaSlicer)
+        );
+        assert_eq!(
+            Slicer::from_mac_bundle_id("com.bambulab.bambu-studio"),
+            Some(Slicer::BambuStudio)
+        );
+        assert_eq!(Slicer::from_mac_bundle_id("com.apple.TextEdit"), None);
     }
 
     #[test]

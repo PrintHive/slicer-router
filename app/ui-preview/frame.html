@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Slicer Router preview frame</title>
+  <!-- The real stylesheet, script and markup, resolved from ../ui/ -->
+  <base href="../ui/">
+  <link rel="stylesheet" href="style.css">
+  <script src="../ui-preview/fake-tauri.js"></script>
+</head>
+<body>
+  <script>
+    fetch("index.html")
+      .then((response) => response.text())
+      .then((html) => {
+        const shipped = new DOMParser().parseFromString(html, "text/html");
+        document.body.replaceChildren(...shipped.body.children);
+        for (const original of document.body.querySelectorAll("script")) {
+          const script = document.createElement("script");
+          script.src = original.getAttribute("src");
+          original.replaceWith(script);
+        }
+      });
+  </script>
+</body>
+</html>

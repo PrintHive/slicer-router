@@ -10,7 +10,8 @@ The project has three parts:
 | --- | --- |
 | `crates/slicer-router-core` | Rust library: read a `.3mf`, decide which slicer owns it, find installed slicers, launch one. No GUI dependencies. |
 | `crates/slicer-router-cli` | The `slicer-router` command. |
-| `crates/slicer-router-ffi` | A static library with a C interface, linked into the macOS thumbnail extension. The only crate that allows unsafe code. |
+| `crates/slicer-router-ffi` | A static library with a C interface, linked into the macOS thumbnail extension. One of two crates that allow unsafe code. |
+| `crates/slicer-router-macos` | LaunchServices calls that read and set the default app for `.3mf`. The other crate that allows unsafe code; it compiles on every platform and finds nothing off macOS. |
 | `app/` | A small Tauri 2 app, "Slicer Router", that registers as the `.3mf` file handler on macOS and Windows. On macOS it carries a Finder thumbnail extension, in `app/macos/ThumbnailExtension`. |
 
 ## How a file is routed
@@ -67,6 +68,9 @@ slicers and your config:
      says so ("Snapmaker Orca isn't installed"), and the answer is saved as an
      override for that slicer. Other files keep their own routing.
 
+The settings window asks these questions and edits the same config. See
+[The settings window](#the-settings-window).
+
 ### Config
 
 A JSON file, created when you pick a default:
@@ -95,8 +99,8 @@ instead. Slicer ids are `bambu-studio`, `orca-slicer`, `snapmaker-orca` and
 
 A slicer id this version does not know is skipped with a warning instead of
 failing the whole file, and other top-level keys are kept when the router saves.
-Only a file that is not a JSON object is rejected. Choosing a default in the app
-replaces such a file.
+Only a file that is not a JSON object is rejected. Choosing a default or an
+override in the app replaces such a file.
 
 ### How slicers are found
 
@@ -121,13 +125,52 @@ failure inside the slicer.
 The app routes files before it starts any UI. Windows starts one process per
 selected file, so each process detects its own file, launches the slicer and
 exits. The app window and its single-instance handoff start only when a person is
-needed: no file was given, a question has to be asked, or a launch failed.
+needed: no file was given, a question has to be asked, or a file did not open.
 
 macOS delivers opened files to the running app as an open-documents event, so the
 app has to start first. That event arrives before the launch finishes (about
 140 ms earlier on macOS 26), so when the app is ready it already knows whether
 files came. It shows the settings window only for a direct launch, with no timer
 and no window to take back.
+
+## The settings window
+
+Launching Slicer Router directly, or reopening it, shows a 480 by 600 window.
+It never shows more than one sheet at a time.
+
+<p>
+  <img src="docs/images/settings.png" width="240" alt="Settings window: four slicer tiles with Bambu Studio selected, and a status line saying Slicer Router opens .3mf files">
+  <img src="docs/images/settings-question.png" width="240" alt="A sheet asking which slicer should open two files that have no slicer info">
+  <img src="docs/images/settings-waiting.png" width="240" alt="After Later: a line saying two files still need a slicer, with a Choose button">
+</p>
+
+- **Default slicer.** One tile per installed slicer, each with the icon read from
+  its own app (macOS reads `CFBundleIconFile` and converts it with `sips`; other
+  platforms and apps without a readable icon show a lettered tile). The selected
+  tile is the slicer for files with no slicer info.
+- **Overrides.** "Send detected files somewhere else" has a menu per kind of
+  project (Bambu, Snapmaker, Prusa, OrcaSlicer). Choosing the detected slicer
+  itself removes the override. When that slicer is not installed, the empty
+  choice says what routing does instead: the default slicer, the only installed
+  slicer, or ask.
+- **Questions.** Files that wait for a choice (see
+  [Choosing the installed slicer](#choosing-the-installed-slicer)) drop a sheet
+  from the top of the window, one group at a time. Esc, a click outside it, or
+  Later closes it and leaves that group waiting, with a Choose button to bring it
+  back. A group that arrives afterwards opens its own sheet. Waiting files live
+  in memory, so they are forgotten when the app quits.
+- **Failures.** A file that did not open (no slicer installed, a version of
+  Slicer Router that cannot route it, or a launch that failed) gets a red sheet
+  that lists up to three file names with a reason. It offers the installed
+  slicers that did not fail to open every failed file once, without changing the
+  config, and "Try again" for the slicers that still exist. A slicer whose app
+  was moved or deleted, or a file that was, cannot be retried. Each button acts
+  only on the files the sheet listed. Failures stay until dismissed, and the app
+  quits once the last one is, unless you opened the window yourself.
+- **Default app.** The window says whether Slicer Router opens `.3mf` files and,
+  when it does not, which app does. See
+  [Make Slicer Router the default .3mf app](#make-slicer-router-the-default-3mf-app).
+  When the platform cannot say, it shows nothing.
 
 ## Finder thumbnails
 
@@ -231,10 +274,20 @@ the extension without its sandbox. `--notarize` submits the zip with the
 
 ## Make Slicer Router the default .3mf app
 
-**macOS.** In Finder select any `.3mf`, press `Cmd+I`, choose Slicer Router
-under Open with, then click Change All.
+**macOS.** Open Slicer Router and click "Make Slicer Router the default". It
+sets the default app for `.3mf` through LaunchServices and checks that it took.
+By hand: in Finder select any `.3mf`, press `Cmd+I`, choose Slicer Router under
+Open with, then click Change All. The app has to be in `/Applications` and opened
+once before macOS knows it.
 
-**Windows.** Settings, Apps, Default apps, search for `.3mf`, choose Slicer Router.
+**Windows.** An app cannot set the default itself. Open Slicer Router and click
+"Reveal a .3mf in Explorer". It selects a small example `.3mf` in the temp folder.
+Right-click it, choose Open with, Choose another app, pick Slicer Router, then
+Always. Or: Settings, Apps, Default apps, search for `.3mf`, choose Slicer Router.
+The window reads the choice from `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.3mf\UserChoiceLatest`,
+falling back to `UserChoice`. Picking Slicer Router from the Open with list
+records `Applications\slicer-router-app.exe` instead of the installer's file class,
+and the window counts that as Slicer Router too.
 
 Then turn off "Associate .3mf files" in the preferences of Bambu Studio,
 OrcaSlicer, Snapmaker Orca and PrusaSlicer (the label varies a little). Each of
@@ -250,7 +303,20 @@ after a slicer has taken the `.3mf` default. This lives in
 the macOS bundle is unchanged.
 
 Launch Slicer Router directly to see the installed slicers, pick the slicer for
-files with no origin, and read these steps again.
+files with no origin, and see whether it is the default app.
+
+## Developing the window
+
+The window is plain HTML, CSS and JavaScript in `app/ui`, with no build step.
+To work on it without building the app, serve `app` and open
+`/ui-preview/index.html`. It loads the shipped markup, styles and script in a
+480 by 600 frame against fixture states (files waiting, failures, not the
+default app and others) that `app/ui-preview/fake-tauri.js` stands in for. The
+preview is outside `frontendDist`, so it is never bundled.
+
+```sh
+python3 -m http.server 8000 --directory app   # then open http://127.0.0.1:8000/ui-preview/index.html
+```
 
 ## CLI
 
@@ -300,8 +366,9 @@ PrusaSlicer files.
 
 Not yet run on Windows. The core crate type-checks and passes clippy for
 `x86_64-pc-windows-msvc`, and the CI workflow runs the tests there, but registry
-discovery, the Tauri app and the NSIS file association have not been exercised on
-a Windows machine.
+discovery, the Tauri app, the NSIS file association, the default-app status read
+from `UserChoiceLatest` and `UserChoice`, and the Explorer reveal have not been exercised on a Windows
+machine.
 
 ## License
 

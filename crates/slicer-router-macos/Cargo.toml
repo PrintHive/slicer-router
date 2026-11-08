@@ -1,0 +1,21 @@
+[package]
+name = "slicer-router-macos"
+description = "LaunchServices calls that read and set the default app for a file type on macOS."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
+# Not the workspace lints: LaunchServices is a C API, and this crate is the one
+# place besides the thumbnail C ABI where unsafe code is allowed.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

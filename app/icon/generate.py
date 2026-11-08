@@ -1,6 +1,7 @@
 """Write the Slicer Router icon masters and every bundle icon made from them.
 
-icon.svg draws 64 px and up; icon-small.svg has heavier strokes for 16 and 32 px.
+icon.svg draws 64 px and up; icon-small.svg has heavier strokes for 16 and 32 px,
+which the settings window also uses as ui/router.svg.
 Needs rsvg-convert (`brew install librsvg`) and macOS iconutil. Run from anywhere.
 """
 import math
@@ -70,7 +71,9 @@ def write_ico(sizes, out):
 
 def main():
     (here / "icon.svg").write_text(icon(src_r=118, src_w=38, dst_r=76, dst_w=28, branch_w=30, spread=222, dim=0.42))
-    (here / "icon-small.svg").write_text(icon(src_r=130, src_w=72, dst_r=96, dst_w=56, branch_w=60, spread=238, dim=0.5))
+    small = icon(src_r=130, src_w=72, dst_r=96, dst_w=56, branch_w=60, spread=238, dim=0.5)
+    (here / "icon-small.svg").write_text(small)
+    (here.parent / "ui" / "router.svg").write_text(small)
     icons = here.parent / "src-tauri" / "icons"
     for name, size in (("32x32.png", 32), ("128x128.png", 128), ("128x128@2x.png", 256), ("icon.png", 512)):
         render(master(size), size, icons / name)

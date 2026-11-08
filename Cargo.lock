@@ -3206,12 +3206,16 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "slicer-router-app"
 version = "0.2.0"
 dependencies = [
+ "base64 0.23.1",
  "serde",
  "serde_json",
  "slicer-router-core",
+ "slicer-router-macos",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "winreg 0.55.0",
+ "zip",
 ]
 
 [[package]]
@@ -3244,6 +3248,13 @@ version = "0.2.0"
 dependencies = [
  "slicer-router-core",
  "tempfile",
+]
+
+[[package]]
+name = "slicer-router-macos"
+version = "0.2.0"
+dependencies = [
+ "core-foundation",
 ]
 
 [[package]]

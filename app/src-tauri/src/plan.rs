@@ -1,9 +1,10 @@
-//! Turn opened files into launches, questions and notices.
+//! Turn opened files into launches, questions and failures.
 
 use std::path::{Path, PathBuf};
 
 use slicer_router_core::{detect, route, Config, InstalledSlicer, Route, Slicer, Verdict};
 
+use crate::failure::Failure;
 use crate::pending::PendingFile;
 
 #[derive(Debug, Default, PartialEq)]
@@ -12,16 +13,22 @@ pub struct Plan {
     pub launches: Vec<(PathBuf, InstalledSlicer)>,
     /// Files that need the person to pick a slicer.
     pub ask: Vec<PendingFile>,
-    /// Problems to tell the person about.
-    pub notices: Vec<String>,
+    /// Files that cannot be opened at all.
+    pub failures: Vec<Failure>,
 }
 
-/// Route every file. An unreadable file is routed like one with no metadata, so
-/// the chosen slicer shows its own error instead of the router refusing.
+/// Route every file, each once however many times it is listed. An unreadable
+/// file is routed like one with no metadata, so the chosen slicer shows its own
+/// error instead of the router refusing.
 pub fn plan(files: &[PathBuf], installed: &[InstalledSlicer], config: &Config) -> Plan {
     let slicers: Vec<Slicer> = installed.iter().map(|i| i.slicer).collect();
     let mut plan = Plan::default();
+    let mut seen: Vec<&PathBuf> = Vec::new();
     for file in files {
+        if seen.contains(&file) {
+            continue;
+        }
+        seen.push(file);
         let verdict = detect(file).unwrap_or_else(|err| {
             eprintln!("slicer-router: {err}");
             Verdict::no_signal()
@@ -36,14 +43,8 @@ pub fn plan(files: &[PathBuf], installed: &[InstalledSlicer], config: &Config) -
                 path: file.clone(),
                 detected,
             }),
-            Route::NoneInstalled => plan.notices.push(format!(
-                "No supported slicer is installed, so {} was not opened.",
-                file.display()
-            )),
-            _ => plan.notices.push(format!(
-                "This version cannot route {}; update Slicer Router.",
-                file.display()
-            )),
+            Route::NoneInstalled => plan.failures.push(Failure::no_slicer_installed(file)),
+            _ => plan.failures.push(Failure::unroutable(file)),
         }
     }
     plan
@@ -56,7 +57,7 @@ pub enum Startup {
     Done,
     /// Files were handed over but some launches failed. Start the app only to show this.
     /// The app must not route the files again, or the ones that opened would open twice.
-    Failed(String),
+    Failed(Vec<Failure>),
     /// A window is needed (no files, or a file needs a question or an error),
     /// and nothing was launched. The app routes the files itself.
     Window,
@@ -78,25 +79,28 @@ pub fn startup(
         return Startup::Window;
     }
     let plan = plan(files, installed, config);
-    if !plan.ask.is_empty() || !plan.notices.is_empty() {
+    if !plan.ask.is_empty() || !plan.failures.is_empty() {
         return Startup::Window;
     }
     let failures = launch_all(&plan.launches, launch);
     if failures.is_empty() {
         Startup::Done
     } else {
-        Startup::Failed(failures.join("\n"))
+        Startup::Failed(failures)
     }
 }
 
-/// Launch every planned file. Returns one message per failure.
+/// Launch every planned file. Returns the files that did not open.
 pub fn launch_all(
     launches: &[(PathBuf, InstalledSlicer)],
     mut launch: impl FnMut(&InstalledSlicer, &Path) -> Result<(), String>,
-) -> Vec<String> {
+) -> Vec<Failure> {
     launches
         .iter()
-        .filter_map(|(file, slicer)| launch(slicer, file).err())
+        .filter_map(|(file, slicer)| {
+            let reason = launch(slicer, file).err()?;
+            Some(Failure::launch(file, slicer, reason))
+        })
         .collect()
 }
 
@@ -135,7 +139,19 @@ mod tests {
             routed,
             [SnapmakerOrca, BambuStudio, OrcaSlicer, PrusaSlicer]
         );
-        assert!(plan.ask.is_empty() && plan.notices.is_empty());
+        assert!(plan.ask.is_empty() && plan.failures.is_empty());
+    }
+
+    #[test]
+    fn a_file_listed_twice_is_routed_once() {
+        let file = fixture("real-bambu-studio-p1s.3mf");
+        let plan = plan(
+            &[file.clone(), file.clone()],
+            &installed(&[BambuStudio]),
+            &Config::default(),
+        );
+        assert_eq!(plan.launches.len(), 1);
+        assert_eq!(plan.launches[0].0, file);
     }
 
     #[test]
@@ -192,13 +208,10 @@ mod tests {
     }
 
     #[test]
-    fn no_installed_slicer_is_reported() {
-        let plan = plan(
-            &[fixture("real-bambu-studio-p1s.3mf")],
-            &[],
-            &Config::default(),
-        );
-        assert_eq!(plan.notices.len(), 1);
+    fn no_installed_slicer_is_reported_for_each_file() {
+        let file = fixture("real-bambu-studio-p1s.3mf");
+        let plan = plan(std::slice::from_ref(&file), &[], &Config::default());
+        assert_eq!(plan.failures, [Failure::no_slicer_installed(&file)]);
     }
 
     fn junk_file(name: &str) -> PathBuf {
@@ -270,14 +283,26 @@ mod tests {
             fixture("real-bambu-studio-p1s.3mf"),
             fixture("real-prusaslicer-cli.3mf"),
         ];
-        let result = startup(&files, &all_four(), &Config::default(), |slicer, _| {
+        let installed = [
+            InstalledSlicer::new(BambuStudio, std::env::temp_dir()),
+            InstalledSlicer::new(PrusaSlicer, std::env::temp_dir()),
+        ];
+        let result = startup(&files, &installed, &Config::default(), |slicer, _| {
             if slicer.slicer == BambuStudio {
-                Err("cannot start Bambu Studio".to_owned())
+                Err("Bambu Studio didn't start".to_owned())
             } else {
                 Ok(())
             }
         });
-        assert_eq!(result, Startup::Failed("cannot start Bambu Studio".into()));
+        assert_eq!(
+            result,
+            Startup::Failed(vec![Failure {
+                file: files[0].clone(),
+                slicer: Some(BambuStudio),
+                reason: "Bambu Studio didn't start".into(),
+                retryable: true,
+            }])
+        );
     }
 
     fn tempfile_dir() -> PathBuf {
