@@ -9,7 +9,8 @@ Usage: scripts/build-macos.sh [--no-sign] [--notarize] [--out DIR]
 
   --no-sign   Sign ad hoc instead of with APPLE_SIGNING_IDENTITY. For CI.
   --notarize  Notarize with the notarytool keychain profile named by
-              NOTARY_PROFILE (default "slicer-router"), then staple.
+              NOTARY_PROFILE (default "slicer-router"), then staple. Set
+              NOTARY_KEYCHAIN to read the profile from another keychain.
   --out DIR   Folder for the zip. Defaults to the folder holding the app.
 
 Signing uses APPLE_SIGNING_IDENTITY, for example
@@ -106,17 +107,21 @@ out=${out:-$(dirname "$app")}
 mkdir -p "$out"
 zip="$out/SlicerRouter-$version-arm64.zip"
 
+notary=(--keychain-profile "${NOTARY_PROFILE:-slicer-router}")
+if [ -n "${NOTARY_KEYCHAIN:-}" ]; then
+  notary+=(--keychain "$NOTARY_KEYCHAIN")
+fi
+
 if [ "$notarize" = 1 ]; then
   echo "==> Notarizing"
   rm -f "$zip"
   ditto -c -k --keepParent "$app" "$zip"
-  result=$(xcrun notarytool submit "$zip" \
-    --keychain-profile "${NOTARY_PROFILE:-slicer-router}" --wait --output-format json)
+  result=$(xcrun notarytool submit "$zip" "${notary[@]}" --wait --output-format json)
   echo "$result"
   status=$(plutil -extract status raw -o - - <<<"$result")
   if [ "$status" != Accepted ]; then
     id=$(plutil -extract id raw -o - - <<<"$result")
-    xcrun notarytool log "$id" --keychain-profile "${NOTARY_PROFILE:-slicer-router}" >&2 || true
+    xcrun notarytool log "$id" "${notary[@]}" >&2 || true
     echo "error: notarization finished as $status" >&2
     exit 1
   fi
