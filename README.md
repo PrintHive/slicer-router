@@ -218,8 +218,20 @@ qlmanage -x -t -s 512 -o /tmp model.3mf   # writes /tmp/model.3mf.png
 
 ## Install
 
-There are no prebuilt releases yet. Build from source. The core and CLI crates
-need Rust 1.88 or newer. The app needs 1.90 or newer, because Tauri 2 does.
+Download the app from [Releases](https://github.com/PrintHive/slicer-router/releases/latest)
+or from [printhiv3d.com/slicer-router](https://www.printhiv3d.com/slicer-router):
+
+- **macOS** (Apple silicon): `SlicerRouter-<version>-macos-arm64.zip`, signed with
+  a Developer ID and notarized. Unzip it and drag Slicer Router to Applications.
+- **Windows** (x64): `SlicerRouter-<version>-windows-x64-setup.exe`. The installer
+  is not code-signed yet, so SmartScreen asks once: More info, then Run anyway.
+
+`SHA256SUMS.txt` in each release lists the checksums.
+
+### Build from source
+
+The core and CLI crates need Rust 1.88 or newer. The app needs 1.90 or newer,
+because Tauri 2 does.
 
 ```sh
 # CLI
@@ -254,6 +266,31 @@ crate as a git dependency, pinned to a release tag:
 ```toml
 slicer-router-core = { git = "https://github.com/PrintHive/slicer-router", tag = "<release tag>" }
 ```
+
+### Publish a release
+
+Set the version in the root `Cargo.toml`, merge it, then push a matching tag:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The `release` workflow checks the tag against `Cargo.toml`, builds a signed and
+notarized macOS zip and the Windows installer, and publishes the release with
+`SHA256SUMS.txt`. A tag with a hyphen, such as `v0.3.0-rc.1`, is published as a
+pre-release. The workflow needs these repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE_P12` | The Developer ID Application certificate and key, as a base64 `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | The `.p12` password |
+| `APPLE_ID` | The Apple ID that notarizes |
+| `APPLE_APP_PASSWORD` | An app-specific password for that Apple ID |
+| `APPLE_TEAM_ID` | The Developer team ID |
+
+The download page at printhiv3d.com/slicer-router finds the assets by name: the
+macOS file must contain `macos` and end in `.zip`, and the Windows file must end
+in `.exe`.
 
 ### Signed and notarized macOS builds
 

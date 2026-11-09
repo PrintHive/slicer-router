@@ -1,0 +1,144 @@
+name: release
+
+# Push a tag such as v0.2.0 to build, sign and publish a release. The tag must
+# match the workspace version in Cargo.toml.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAURI_CLI_VERSION: 2.9.6
+
+jobs:
+  version:
+    name: check the tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - id: version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "error: tag $GITHUB_REF_NAME does not match workspace version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS app, signed and notarized
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "${{ env.TAURI_CLI_VERSION }}" --locked
+      - name: Import the Developer ID certificate and notary credentials
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          existing=()
+          while IFS= read -r line; do
+            existing+=("$(sed 's/^ *"//; s/"$//' <<<"$line")")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          security default-keychain -s "$keychain"
+          xcrun notarytool store-credentials slicer-router --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --keychain "$keychain"
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
+          test -n "$identity"
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+      - name: Build, sign and notarize
+        run: scripts/build-macos.sh --notarize --out dist
+      - name: Name the zip for the download page
+        run: mv "dist/SlicerRouter-$VERSION-arm64.zip" "dist/SlicerRouter-$VERSION-macos-arm64.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos
+          path: dist/SlicerRouter-*-macos-arm64.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "${{ env.TAURI_CLI_VERSION }}" --locked
+      - name: Build the installer
+        run: cargo tauri build --bundles nsis
+        working-directory: app/src-tauri
+      - name: Name the installer for the download page
+        shell: bash
+        run: |
+          mkdir dist
+          installers=(target/release/bundle/nsis/*.exe)
+          test "${#installers[@]}" = 1
+          mv "${installers[0]}" "dist/SlicerRouter-$VERSION-windows-x64-setup.exe"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows
+          path: dist/SlicerRouter-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  publish:
+    name: publish the GitHub release
+    needs: [version, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write checksums
+        working-directory: dist
+        run: sha256sum SlicerRouter-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create the release
+        run: |
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* -R "$GITHUB_REPOSITORY" \
+            --title "Slicer Router $VERSION" --generate-notes --verify-tag "${prerelease[@]}"
