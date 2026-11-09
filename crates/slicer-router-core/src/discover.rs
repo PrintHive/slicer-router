@@ -93,22 +93,10 @@ fn identify_bundle(app: &Path) -> Option<InstalledSlicer> {
         .take(1 << 20)
         .read_to_string(&mut xml)
         .ok()?;
-    let id = bundle_identifier(&xml)?;
-    let id = id.trim().trim_end_matches('/');
-    Slicer::ALL
-        .iter()
-        .copied()
-        .find(|slicer| {
-            slicer
-                .spec()
-                .mac_bundle_ids
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(id))
-        })
-        .map(|slicer| InstalledSlicer {
-            slicer,
-            path: app.to_owned(),
-        })
+    Slicer::from_mac_bundle_id(&bundle_identifier(&xml)?).map(|slicer| InstalledSlicer {
+        slicer,
+        path: app.to_owned(),
+    })
 }
 
 /// `CFBundleIdentifier` from an XML property list.

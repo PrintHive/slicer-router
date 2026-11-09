@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Slicer Router",
-  "version": "0.1.0",
   "identifier": "com.printhive.slicer-router",
   "build": {
     "frontendDist": "../ui"
@@ -10,7 +9,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
   },
   "bundle": {

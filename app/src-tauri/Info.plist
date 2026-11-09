@@ -4,5 +4,25 @@
 <dict>
   <key>LSUIElement</key>
   <true/>
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.shapr3d.3d-manufacturing.3mf</string>
+      <key>UTTypeDescription</key>
+      <string>3MF</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>3mf</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
 </dict>
 </plist>

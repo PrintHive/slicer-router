@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Slicer Router window preview</title>
+  <style>
+    body { margin: 0; padding: 24px; background: #2b2e2e; color: #f0eee9; font: 13px/1.4 system-ui, sans-serif; display: flex; gap: 24px; align-items: flex-start; }
+    iframe { width: 480px; height: 600px; border: 1px solid #333838; border-radius: 12px; background: #0a0a0a; box-shadow: 0 30px 80px rgba(0, 0, 0, .55); flex: none; }
+    nav { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+    button { font: inherit; padding: 4px 10px; background: #1a1c1c; color: inherit; border: 1px solid #333838; border-radius: 4px; cursor: pointer; }
+    button[aria-pressed="true"] { border-color: #39ff14; }
+    label { color: #b2b8b8; margin-top: 8px; display: block; }
+    p { color: #848c8c; margin: 12px 0 0; max-width: 260px; }
+  </style>
+</head>
+<body>
+  <iframe id="frame" title="Slicer Router window"></iframe>
+  <nav id="states" aria-label="Fixture state"></nav>
+  <script>
+    const options = new URLSearchParams(location.search);
+    const state = options.get("state") ?? "default";
+    const states = [
+      "default", "overrides", "mac-not-default", "windows-not-default", "status-unknown",
+      "files-waiting", "missing-slicer", "many-files", "two-questions",
+      "failure", "failures", "failure-and-waiting", "empty", "no-slicer",
+      "missing-default", "missing-ask", "single-slicer",
+    ];
+    const frame = document.getElementById("frame");
+    const nav = document.getElementById("states");
+    const flags = ["icons=none", "launch=fail", "makeDefault=fail", "command=fail"];
+
+    function load() {
+      const query = new URLSearchParams(location.search);
+      frame.src = `frame.html?${query}`;
+      nav.replaceChildren(
+        ...states.map((name) => {
+          const button = document.createElement("button");
+          button.textContent = name;
+          button.setAttribute("aria-pressed", String(name === (query.get("state") ?? "default")));
+          button.onclick = () => {
+            query.set("state", name);
+            history.replaceState(null, "", `?${query}`);
+            load();
+          };
+          return button;
+        }),
+        ...flags.map((flag) => {
+          const [key, value] = flag.split("=");
+          const label = document.createElement("label");
+          const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: query.get(key) === value });
+          box.onchange = () => {
+            if (box.checked) query.set(key, value);
+            else query.delete(key);
+            history.replaceState(null, "", `?${query}`);
+            load();
+          };
+          label.append(box, ` ${flag}`);
+          return label;
+        }),
+        ...[["no-info", "a file with no info arrives"], ["prusa", "a Prusa file arrives"], ["failure", "a launch fails"]].map(([kind, text]) => {
+          const button = document.createElement("button");
+          button.textContent = text;
+          button.onclick = () => frame.contentWindow.__PREVIEW__.arrive(kind);
+          return button;
+        }),
+        Object.assign(document.createElement("p"), {
+          textContent: "Fixture states for ../ui/main.js. Emulate prefers-reduced-motion in devtools to check the fades.",
+        }),
+      );
+    }
+    load();
+  </script>
+</body>
+</html>

@@ -194,14 +194,18 @@ impl Config {
     }
 }
 
+/// The macOS folder for the config, and the thumbnail snapshot beside it, of the
+/// user whose home is `home`.
+pub(crate) fn mac_folder(home: &Path) -> PathBuf {
+    home.join("Library/Application Support/Slicer Router")
+}
+
 fn config_path_from(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     if let Some(path) = env(CONFIG_PATH_ENV).filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
     let dir = if cfg!(target_os = "macos") {
-        PathBuf::from(env("HOME")?)
-            .join("Library/Application Support")
-            .join("Slicer Router")
+        mac_folder(Path::new(&env("HOME")?))
     } else if cfg!(windows) {
         PathBuf::from(env("APPDATA")?).join("Slicer Router")
     } else {
